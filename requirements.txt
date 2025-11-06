@@ -1,0 +1,12 @@
+# Bot
+botbuilder-integration-aiohttp>=4.15.0
+
+# Server
+quart==0.20.0
+uvicorn==0.38.0
+gunicorn==23.0.0
+
+# Agent
+llama-index==0.14.7
+llama-index-llms-bedrock-converse==0.11.0
+google-ads==28.4.0

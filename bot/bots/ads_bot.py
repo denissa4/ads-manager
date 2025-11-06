@@ -1,0 +1,77 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+from typing import List
+import aiohttp
+from botbuilder.core import ActivityHandler, MessageFactory, TurnContext
+from botbuilder.schema import ChannelAccount, Attachment, Activity
+
+
+
+
+
+class AdsBot(ActivityHandler):
+    async def on_members_added_activity(
+        self, members_added: List[ChannelAccount], turn_context: TurnContext
+    ):
+        for member in members_added:
+            if member.id != turn_context.activity.recipient.id:
+                await turn_context.send_activity("Hi there! I’m your Google Ads Campaign Assistant. " \
+                                                "I'll help you design, optimize, manage, and launch your Google Ads. " \
+                                                "Just send me over your product data to get started.")
+                
+
+    async def send_to_backend(self, prompt: str) -> str:
+        url = "http://127.0.0.1:8000/prompt"
+        payload = {"prompt": prompt}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=60) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return data.get("response", "No response from backend.")
+                    else:
+                        return f"Backend error: {resp.status}"
+        except Exception as e:
+            return f"Error contacting backend: {e}"
+
+
+    async def on_message_activity(self, turn_context: TurnContext):
+
+        user_prompt = turn_context.activity.text
+
+        response = await self.send_to_backend(user_prompt)
+
+        response_card = {
+            "type": "AdaptiveCard",
+            "$schema": "https://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.5",
+            "body": [
+                {
+                "type": "TextBlock",
+                "text": response,
+                "wrap": True
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "AI-generated content cant be incorrect.",
+                    "wrap": True,
+                    "horizontalAlignment": "Right",
+                    "weight": "Lighter",
+                    "isSubtle": True
+                }
+            ]
+        }
+
+        card_attachment = Attachment(
+            content_type="application/vnd.microsoft.card.adaptive",
+            content=response_card
+        )
+
+        await turn_context.send_activity(
+            Activity(
+                type="message",
+                attachments=[card_attachment]
+            )
+        )
