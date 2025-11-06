@@ -1,5 +1,4 @@
 from quart import Quart, request, jsonify, redirect, render_template_string
-from werkzeug.middleware.proxy_fix import ProxyFix
 from agent.core import create_agent
 from helpers.google_ads_token import get_google_ads_auth_url, get_google_ads_token
 import asyncio
@@ -7,7 +6,6 @@ import os
 
 
 app = Quart(__name__)
-app.asgi_app = ProxyFix(app.asgi_app, x_proto=1, x_host=1)
 
 # In-memory storage for active user sessions
 user_agents = {}
