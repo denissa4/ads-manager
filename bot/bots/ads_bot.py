@@ -17,13 +17,16 @@ class AdsBot(ActivityHandler):
         for member in members_added:
             if member.id != turn_context.activity.recipient.id:
                 await turn_context.send_activity("Hi there! I’m your Google Ads Campaign Assistant. " \
-                                                "I'll help you design, optimize, manage, and launch your Google Ads. " \
-                                                "Just send me over your product data to get started.")
+                                                "I'll help you design, optimize, manage, and launch your Google Ads Campaigns. " \
+                                                'To get started type "authenticate" into the chat to authorise the use of the Google Ads API.')
                 
 
-    async def send_to_backend(self, prompt: str) -> str:
+    async def send_to_backend(self, prompt: str, user_id: str) -> str:
         url = "http://127.0.0.1:8000/prompt"
-        payload = {"prompt": prompt}
+        payload = {
+            "prompt": prompt,
+            "user_id": user_id
+            }
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -40,8 +43,9 @@ class AdsBot(ActivityHandler):
     async def on_message_activity(self, turn_context: TurnContext):
 
         user_prompt = turn_context.activity.text
+        user_id = turn_context.activity.from_property.id
 
-        response = await self.send_to_backend(user_prompt)
+        response = await self.send_to_backend(user_prompt, user_id)
 
         response_card = {
             "type": "AdaptiveCard",

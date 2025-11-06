@@ -1,12 +1,9 @@
 from llama_index.llms.bedrock_converse import BedrockConverse
 from llama_index.core.agent.workflow import FunctionAgent, AgentWorkflow
 from llama_index.core.workflow import Context
+from llama_index.core.memory import Memory
 import os
-
-
-async def add(a: int, b: int) -> str:
-    return str(a + b)
-
+from . import tools
 
 async def create_agent():
     try:
@@ -15,23 +12,24 @@ async def create_agent():
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", ""),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
             region_name=os.getenv("AWS_DEFAULT_REGION", ""),
-            max_tokens=int(os.getenv("MAX_TOKENS", 12000)),
+            max_tokens=int(os.getenv("MAX_TOKENS", 32000)),
         )
 
         with open("/app/agent/system_prompt.md", 'r') as f:
             system_prompt = f.read()
 
         agent = FunctionAgent(
-            tools=[add],
+            tools=[tools.google_ads_keyword_search],
             llm=llm,
             system_prompt=system_prompt,
         )
 
         ctx = Context(agent)
+        memory = Memory.from_defaults(token_limit=10000)
 
         workflow = AgentWorkflow(agents=[agent])
 
-        return workflow, ctx
+        return workflow, ctx, memory
     except Exception as e:
         print(f"Error creating agent: {e}")
         return None
