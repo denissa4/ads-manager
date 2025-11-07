@@ -22,7 +22,7 @@ EXPOSE 80
 COPY supervisord.conf /app/supervisord.conf
 
 ### LOCAL TESTING ONLY - comment out for production. ###
-# ENV OAUTHLIB_INSECURE_TRANSPORT=1 
+ENV OAUTHLIB_INSECURE_TRANSPORT=1 
 ########################################################
 
 CMD ["/usr/bin/supervisord", "-c", "/app/supervisord.conf"]
