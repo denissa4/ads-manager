@@ -1,8 +1,10 @@
 from quart import Quart, request, jsonify, redirect, render_template_string
 from agent.core import create_agent
 from helpers.google_ads_token import get_google_ads_auth_url, get_google_ads_token
+from helpers.azure_tables import get_user_data, store_user_data
 import asyncio
 import os
+import time
 
 
 app = Quart(__name__)
@@ -11,7 +13,27 @@ app = Quart(__name__)
 user_agents = {}
 user_agents_lock = asyncio.Lock()
 
-# TODO: Add background check for inactive user sessions & clear them from memory.
+# Check for inactive sessions, clear them from memory after 30 mins of inactivity.
+SESSION_TIMEOUT = 30 * 60
+
+async def cleanup_inactive_sessions():
+    while True:
+        await asyncio.sleep(300)
+        now = time.time()
+        async with user_agents_lock:
+            inactive_users = [
+                user_id for user_id, (_, _, _, _, last_active) in user_agents.items()
+                if now - last_active > SESSION_TIMEOUT
+            ]
+            for user_id in inactive_users:
+                del user_agents[user_id]
+                print(f"Cleared inactive session for user: {user_id}")
+
+@app.before_serving
+async def startup_tasks():
+    app.add_background_task(cleanup_inactive_sessions)
+    print("Clean-up task running...")
+
 
 # Main messaging endpoint 
 @app.route("/prompt", methods=["POST"])
@@ -25,8 +47,8 @@ async def prompt():
         async with user_agents_lock:
             if user_id in user_agents:
                 agent, context, memory = await create_agent()
-                user_agents[user_id] = (agent, context, memory, {})
-                return jsonify({"response": "Chat history has been refreshed."})
+                user_agents[user_id] = (agent, context, memory, {}, time.time())
+                return jsonify({"response": "Chat history has been refreshed."}), 200
 
     # "autheticate" command to authenticate user's Google Ads API
     if prompt.lower() == "authenticate":
@@ -38,9 +60,20 @@ async def prompt():
     async with user_agents_lock:
         if user_id not in user_agents:
             agent, context, memory = await create_agent()
-            user_agents[user_id] = (agent, context, memory, {})
+            user_agents[user_id] = (agent, context, memory, {}, time.time())
+        else:
+            # Update timestamp
+            agent, context, memory, google_creds, _ = user_agents[user_id]
+            user_agents[user_id] = (agent, context, memory, google_creds, time.time())
+        agent, context, memory, _, _ = user_agents[user_id]
 
-        agent, context, memory, _ = user_agents[user_id]
+        # Add google creds from Azure table if they exist
+        customer_id, access_token, refresh_token = await get_user_data(user_id)
+        await context.store.set("user_id", user_id)
+        await context.store.set("google_customer_id", customer_id)
+        await context.store.set("google_access_token", access_token)
+        await context.store.set("google_refresh_token", refresh_token)
+
 
     response = await agent.run(user_msg=prompt, ctx=context, memory=memory)
     return jsonify({"response": str(response)}), 200
@@ -55,7 +88,7 @@ async def authenticate():
     # Store Google credentials in user's agent lock
     async with user_agents_lock:
         if user_id in user_agents:
-            agent, context, memory, google_creds = user_agents[user_id]
+            agent, context, memory, google_creds, _ = user_agents[user_id]
         else:
             google_creds = {}
             agent, context, memory = await create_agent()
@@ -63,7 +96,7 @@ async def authenticate():
         google_creds['state'] = state
         google_creds['access_token'] = ""
         google_creds['refresh_token'] = ""
-        user_agents[user_id] = (agent, context, memory, google_creds)
+        user_agents[user_id] = (agent, context, memory, google_creds, time.time())
 
     return redirect(auth_url)
 
@@ -75,13 +108,20 @@ async def callback():
 
     async with user_agents_lock:
         # Find the user associated with this state
-        for user_id, (agent, context, memory, google_creds) in user_agents.items():
+        for user_id, (agent, context, memory, google_creds, last_active) in user_agents.items():
             if google_creds.get("state") == state:
                 if not google_creds.get("refresh_token"):
                     if not google_creds.get("access_token"):
                         credentials = await get_google_ads_token(state, authorization_response)
                         google_creds['access_token'] = credentials.token
                         google_creds['refresh_token'] = credentials.refresh_token
+                        # Store user's data in Azure table
+                        stored = await store_user_data(user_id, google_creds)
+                        if stored:
+                            print("User data stored successfully.")
+                        else:
+                            print("There was an issue storing the user data.")
+                        
                         await context.store.set("google_refresh_token", credentials.refresh_token)
 
                 # If it's a POST request, the user submitted their customer ID - store it in context for use in tools
@@ -89,8 +129,16 @@ async def callback():
                     form_data = await request.form
                     customer_id = form_data.get("customer_id").replace("-", "")
                     google_creds["customer_id"] = customer_id
+                    # Store user's data in Azure table
+                    stored = await store_user_data(user_id, google_creds)
+                    if stored:
+                        print("User data stored successfully.")
+                    else:
+                        print("There was an issue storing the user data.")
                     await context.store.set("google_customer_id", customer_id)
-                    user_agents[user_id] = (agent, context, memory, google_creds)
+
+                    user_agents[user_id] = (agent, context, memory, google_creds, time.time())
+
                     return f"""
                         <html>
                         <body style='font-family: sans-serif;'>
