@@ -70,9 +70,12 @@ async def prompt():
         # Add google creds from Azure table if they exist
         customer_id, access_token, refresh_token = await get_user_data(user_id)
         await context.store.set("user_id", user_id)
-        await context.store.set("google_customer_id", customer_id)
-        await context.store.set("google_access_token", access_token)
-        await context.store.set("google_refresh_token", refresh_token)
+        if customer_id:
+            await context.store.set("google_customer_id", customer_id)
+        if access_token:
+            await context.store.set("google_access_token", access_token)
+        if refresh_token:
+            await context.store.set("google_refresh_token", refresh_token)
 
 
     response = await agent.run(user_msg=prompt, ctx=context, memory=memory)
