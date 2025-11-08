@@ -1,4 +1,4 @@
-from azure.data.tables import TableServiceClient
+from azure.data.tables import TableServiceClient, UpdateMode
 from azure.core.exceptions import ResourceNotFoundError
 from azure.core.credentials import AzureSasCredential
 import os
@@ -33,7 +33,7 @@ def _store_user_data(user_id: str, google_creds: dict):
             "GoogleAccessToken": access_token,
             "GoogleRefreshToken": refresh_token
         }
-        table_client.upsert_entity(entity=entity, mode="MERGE")
+        table_client.upsert_entity(entity=entity, mode=UpdateMode.MERGE)
 
         return True
     
