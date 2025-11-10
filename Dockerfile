@@ -15,6 +15,7 @@ COPY . /app/
 
 RUN pip install -r /app/requirements.txt && \
     mkdir -p /var/www/html/bot/static && \
+    mkdir -p /var/www/html/bot/static/files && \
     cp /app/nginx/nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 80
