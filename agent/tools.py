@@ -1,9 +1,10 @@
 from google.ads.googleads.client import GoogleAdsClient
-from llama_index.core.llms import ChatMessage
 from llama_index.core.workflow import Context
-import aiofiles
-import uuid
+from llama_index.core.llms import ChatMessage
+from helpers.file_helpers import create_keyword_report_file, file_to_text, create_ads_campaign_file
+from . import core
 import os
+
 
 DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -11,8 +12,6 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 MANAGER_ID = os.getenv("GOOGLE_ADS_MANAGER_ID")
 
 APP_URL = os.getenv("APP_URL", "")
-
-FILE_SERVE_DIR = '/var/www/html/bot/static/files'
 
 
 async def google_ads_keyword_search(ctx: Context, keywords: list):
@@ -71,37 +70,40 @@ async def google_ads_keyword_search(ctx: Context, keywords: list):
         if not results:
             return "No keyword data found for the provided search terms. Please try different keywords."
         
-        # Get 3 LLM generated campaign ideas/ strategies to add to the report
-        with open('/app/agent/system_prompt.md', 'r') as f:
-            system_prompt = f.read()
-        messages = [
-            ChatMessage(role="system", content=f"You are a helpful assistant whose job is to generate 3 in-depth Google Ads Campaign ideas based on the given keyword research results given by the user. Use the following as a reference to help you complete your task: {system_prompt}"),
-            ChatMessage(role="user", content=f"Keyword Search Results: {str(results)}")
-        ]
-        ctx.agent.llm.chat()
+        report_download_url, report_file_path = await create_keyword_report_file(results)
+        await ctx.store.set('keywords_search_file', report_file_path)
 
-        report_download_url = await create_keyword_report_file(results)
-
-        return f"Report download URL:\n{report_download_url}\n\nKeyword search data:\n{str(results)}"
+        return f"In-depth keyword statistics spreadsheet download URL:\n{report_download_url}\n\nKeyword search data:\n{str(results)}."
     except Exception as e:
         print(e)
         return str(e)
     
 
-async def create_keyword_report_file(data: list):
-    file_name = f"{str(uuid.uuid4())[:6]}_keyword_report.txt"
-    file_path = f"{FILE_SERVE_DIR}/{file_name}"
+async def create_campaign_ideas_report(ctx: Context, reference_data_file: str, n_ideas: int) -> str:
+    '''
+    Uses an LLM to generate n Google Ads Campaign ideas based on the given reference data
 
-    os.makedirs(FILE_SERVE_DIR, exist_ok=True)
+    Args:
+        - reference_data_file (str): The file path to the user's reference data used to generate Google Ads Campaign ideas (can be a keyword statistics spreadsheet or the user's own data).
+        - n_idead (int): The number of Google Ads Campaign ideas the LLM should generate.
+    Returns:
+        - (str): The download URL to the generated Google Ads Campaign ideas file.
+    '''
+    llm = await core.get_llm()
 
-    async with aiofiles.open(file_path, 'w', encoding='utf-8') as f:
-        for result in data:
-            await f.write(f"Keyword: {result.get('keyword', '')}\n")
-            await f.write(f"Average Monthly Searches: {result.get('avg_monthly_searches', 'N/A')}\n")
-            await f.write(f"Competition: {result.get('competition', 'N/A')}\n")
-            await f.write(f"Competition Index: {result.get('competition_index', 'N/A')}\n")
-            await f.write(f"Low Top of Page Bid: {result.get('low_top_of_page_bid', 'N/A')}\n")
-            await f.write(f"High Top of Page Bid: {result.get('high_top_of_page_bid', 'N/A')}\n")
-            await f.write("-" * 40 + "\n")
+    reference_data = file_to_text(reference_data_file)
 
-    return f"{APP_URL}/downloads/{file_name}"
+    with open('/app/agent/system_prompt.md', 'r') as f:
+        system_prompt_guidelines = f.read()
+
+    system_prompt = f"You are a helpful assistant. Your job is to generate exactly {n_ideas} Google Ads Campaign ideas based on the user's reference data. Use these guidelines to help you:\n\n{system_prompt_guidelines}"
+
+    messages = [ChatMessage(role="user", content=f"Reference Data:\n\n{reference_data}"), 
+                ChatMessage(role="system", content=system_prompt)]
+    
+    response = await llm.achat(messages)
+
+    download_url, file_path = create_ads_campaign_file(str(response))
+    await ctx.store.set('campaign_ideas_file', file_path)
+
+    return f"Google Ads Campaign ideas download URL: {download_url}"

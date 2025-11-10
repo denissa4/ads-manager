@@ -77,8 +77,23 @@ async def prompt():
         if refresh_token:
             await context.store.set("google_refresh_token", refresh_token)
 
+    prompt_ext = ""
+    keywords_file = await context.store.get('keywords_search_file', '')
+    campaign_ideas_file = await context.store.get('campaign_ideas_file', '')
 
-    response = await agent.run(user_msg=prompt, ctx=context, memory=memory)
+    if keywords_file:
+        prompt_ext += f"Keyword search file path (use as reference data for Google Ads Campaign generation): {keywords_file}\n"
+    if campaign_ideas_file:
+        prompt_ext += f"Campaign ideas file path: {campaign_ideas_file}"
+    
+    full_prompt = ""
+    if prompt_ext:
+        full_prompt = f"SYSTEM: {prompt_ext}\n\nUSER: {prompt}"
+    else:
+        full_prompt = prompt
+
+
+    response = await agent.run(user_msg=full_prompt, ctx=context, memory=memory)
     return jsonify({"response": str(response)}), 200
 
 
