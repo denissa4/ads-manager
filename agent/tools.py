@@ -17,9 +17,9 @@ APP_URL = os.getenv("APP_URL", "")
 async def google_ads_keyword_search(ctx: Context, keywords: list):
     '''Conducts a Google Ads Keyword search and returns keyword stats.'''
     try:
-        refresh_token = await ctx.store.get("google_refresh_token")
-        customer_id = await ctx.store.get('google_customer_id')
-        user_id = await ctx.store.get("user_id")
+        refresh_token = await ctx.store.get("google_refresh_token", "")
+        customer_id = await ctx.store.get('google_customer_id', "")
+        user_id = await ctx.store.get("user_id", "")
 
         # Check user is authenticated, if not, send the auth link.
         if not refresh_token or not customer_id:
