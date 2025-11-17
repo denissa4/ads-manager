@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import asyncio
 import openpyxl
@@ -104,3 +105,8 @@ def file_to_text(file_path: str) -> str:
     
     else:
         raise ValueError("Unsupported file type")
+    
+
+def sanitize_text(text: str) -> str:
+    # Remove prohibited symbols
+    return re.sub(r"[#\$]{2,}", "", text).strip()
