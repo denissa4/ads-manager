@@ -1,11 +1,10 @@
-from quart import Quart, request, jsonify, redirect, render_template_string, render_template, Response
+from quart import Quart, request, jsonify, redirect, render_template_string
 from agent.core import create_agent
 from helpers.google_ads_token import get_google_ads_auth_url, get_google_ads_token
 from helpers.azure_tables import get_user_data, store_user_data
 import asyncio
 import os
 import time
-import secrets
 
 
 app = Quart(__name__)
@@ -118,23 +117,7 @@ async def authenticate():
         google_creds['refresh_token'] = ""
         user_agents[user_id] = (agent, context, memory, google_creds, time.time())
 
-    google_oauth_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-
-    nonce = secrets.token_urlsafe(16)
-
-    # Add CSP header with nonce
-    csp_header = (
-        f"default-src 'self'; "
-        f"script-src 'self' https://accounts.google.com https://apis.google.com 'nonce-{nonce}'; "
-        f"connect-src 'self' https://accounts.google.com https://*.teams.data.microsoft.com; "
-        f"style-src 'self' 'unsafe-inline';"
-    )
-
-    html = await render_template("oauth.html", client_id=google_oauth_client_id, auth_url=auth_url, nonce=nonce)
-    response = Response(html)
-    response.headers["Content-Security-Policy"] = csp_header
-    response.headers["Content-Type"] = "text/html"
-    return response
+    return redirect(auth_url)
 
 
 @app.route("/callback", methods=["GET", "POST"])

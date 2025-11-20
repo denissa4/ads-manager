@@ -4,7 +4,7 @@ from google_auth_oauthlib.flow import Flow
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("APP_URL") + "/callback"
-SCOPES = ["https://www.googleapis.com/auth/adwords", "openid", "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/userinfo.email"]
+SCOPES = ["https://www.googleapis.com/auth/adwords"]
 
 
 async def get_google_ads_auth_url():
