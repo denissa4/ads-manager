@@ -80,7 +80,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
                     "competition_index": metrics.competition_index,
                     "seed_word": seed_word  # track which seed word produced it
                 })
-            asyncio.sleep(1)
+            await asyncio.sleep(1)
 
         if not results:
             return "No keyword data found for the provided search terms. Please try different keywords."
@@ -112,7 +112,7 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
 
         reference_data_file_paths = []
         keywords_file = await ctx.store.get('keywords_search_file', '')
-        uploaded_files = await ctx.store.get('uploaded_files') or []
+        uploaded_files = await ctx.store.get('uploaded_files', '')
 
         if keywords_file:
             reference_data_file_paths.append(keywords_file)
