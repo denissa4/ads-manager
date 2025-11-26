@@ -5,12 +5,19 @@ import asyncio
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment
+from botframework.connector.auth import MicrosoftAppCredentials
 import pandas as pd
 import docx
 import pdfplumber
+import aiohttp
 
 APP_URL = os.getenv("APP_URL", "")
 FILE_SERVE_DIR = '/var/www/html/bot/static/files'
+USER_UPLOADS_DIR = '/app/user_uploads'
+
+CLIENT_ID = os.getenv("MicrosoftAppId", "")
+CLIENT_SECRET = os.getenv("MicrosoftAppPassword", "")
+TENANT_ID = os.getenv("MicrosoftAppTenantId", "")
 
 
 async def create_keyword_report_file(data: list) -> str:
@@ -110,3 +117,52 @@ def file_to_text(file_path: str) -> str:
 def sanitize_text(text: str) -> str:
     # Remove prohibited symbols
     return re.sub(r"[#\$]{2,}", "", text).strip()
+
+
+async def handle_attachments(user_id: str, attachment_urls: list):
+    os.makedirs(f"{USER_UPLOADS_DIR}/{user_id}", exist_ok=True)
+
+    results = []
+
+    async with aiohttp.ClientSession() as session:
+        for el in attachment_urls:
+            url = el.get('url', '')
+            filename = f"{uuid.uuid4().hex[:4]}_{el.get('name', 'unknown.txt')}"
+            local_path = f"{USER_UPLOADS_DIR}/{user_id}/{filename}"
+
+            try:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        results.append({
+                            "filename": filename,
+                            "file_path": None,
+                            "text": f"[Failed to download, status: {resp.status}]"
+                        })
+                        continue
+
+                    # Write file to user uploads directory
+                    content = await resp.read()
+                    with open(local_path, "wb") as f:
+                        f.write(content)
+
+                # Extract text content
+                try:
+                    text = file_to_text(local_path)
+                    text = sanitize_text(text)
+                except Exception as e:
+                    text = f"[Error reading file: {e}]"
+
+                results.append({
+                    "filename": filename,
+                    "file_path": local_path,
+                    "text": text
+                })
+
+            except Exception as e:
+                results.append({
+                    "filename": filename,
+                    "file_path": None,
+                    "text": f"[Exception during download: {e}]"
+                })
+
+    return results

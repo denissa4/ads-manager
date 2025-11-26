@@ -5,6 +5,7 @@ from llama_index.core.memory import Memory
 import os
 from . import tools
 
+
 async def get_llm():
     return BedrockConverse(
             model=os.getenv("AWS_MODEL_NAME", ""),
@@ -12,7 +13,7 @@ async def get_llm():
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
             region_name=os.getenv("AWS_DEFAULT_REGION", ""),
             max_tokens=int(os.getenv("MAX_TOKENS", 32000)),
-            timeout=300.00
+            timeout=3600.00
         )
 
 async def create_agent():
@@ -32,7 +33,7 @@ async def create_agent():
 
         memory = Memory.from_defaults(token_limit=10000)
 
-        workflow = AgentWorkflow(agents=[agent], timeout=300.00)
+        workflow = AgentWorkflow(agents=[agent], timeout=3600.00)
 
         return workflow, ctx, memory
     except Exception as e:

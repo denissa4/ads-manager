@@ -2,6 +2,7 @@ from quart import Quart, request, jsonify, redirect, render_template_string
 from agent.core import create_agent
 from helpers.google_ads_token import get_google_ads_auth_url, get_google_ads_token
 from helpers.azure_tables import get_user_data, store_user_data
+from helpers.file_helpers import handle_attachments
 import asyncio
 import os
 import time
@@ -26,6 +27,17 @@ async def cleanup_inactive_sessions():
                 if now - last_active > SESSION_TIMEOUT
             ]
             for user_id in inactive_users:
+                _, context, _, _, _ = user_agents[user_id]
+                keywords_file = await context.store.get('keywords_search_file', '')
+                campaign_ideas_file = await context.store.get('campaign_ideas_file', '')
+                uploaded_files = await context.store.get('uploaded_files') or []
+                if keywords_file:
+                    os.remove(keywords_file)
+                if campaign_ideas_file:
+                    os.remove(campaign_ideas_file)
+                if uploaded_files:
+                    for f in uploaded_files:
+                        os.remove(f)
                 del user_agents[user_id]
                 print(f"Cleared inactive session for user: {user_id}")
 
@@ -42,6 +54,7 @@ async def prompt():
     data = await request.get_json()
     prompt = data.get("prompt")
     user_id = data.get("user_id")
+    attachments = data.get("attachments")
 
     # "refresh" command to reset the user agent's memory (chat history)
     if prompt.lower() == "refresh":
@@ -56,7 +69,7 @@ async def prompt():
         BASE_URL = os.getenv("APP_URL", "")
         user_auth_url = f"{BASE_URL}/authenticate?user_id={user_id}"
         return jsonify({"response": f"Please follow this link to authenticate: [Authenticate]({user_auth_url})"}), 200
-
+    
     # Check for existing user agent session or create a new one.
     async with user_agents_lock:
         if user_id not in user_agents:
@@ -69,14 +82,37 @@ async def prompt():
         agent, context, memory, _, _ = user_agents[user_id]
 
         # Add google creds from Azure table if they exist
-        customer_id, access_token, refresh_token = await get_user_data(user_id)
+        customer_id, refresh_token = await get_user_data(user_id)
         await context.store.set("user_id", user_id)
         if customer_id:
             await context.store.set("google_customer_id", customer_id)
-        if access_token:
-            await context.store.set("google_access_token", access_token)
         if refresh_token:
             await context.store.set("google_refresh_token", refresh_token)
+    
+    # Parse attachments and extract URLs for downloadable files
+    attachments_data = None
+    attached_files_data = ""
+    attached_file_paths = []
+    if attachments:
+        attachment_urls = []
+        for attachment in attachments:
+            if attachment.get('contentType') == 'text/html':
+                continue
+            content = attachment.get('content', {})
+            content_url = content.get('downloadUrl', '')
+            attachment_name = attachment.get('name', 'unknown.txt')
+            attachment_urls.append({"url": content_url, "name": attachment_name})
+            if content_url:
+                attachments_data = await handle_attachments(user_id, attachment_urls)
+        if attachments_data:
+            for data in attachments_data:
+                filename = data.get('filename', '')
+                content = data.get('text', '')
+                file_path = data.get('file_path', '')
+
+                attached_files_data += f"--- {filename} ---\n {content}\n---\n\n"
+                attached_file_paths.append(file_path)
+            await context.store.set("uploaded_files", attached_file_paths)
 
     prompt_ext = ""
     keywords_file = await context.store.get('keywords_search_file', '')
@@ -85,14 +121,15 @@ async def prompt():
     if keywords_file:
         prompt_ext += f"Keyword search file path (use as reference data for Google Ads Campaign generation): {keywords_file}\n"
     if campaign_ideas_file:
-        prompt_ext += f"Campaign ideas file path: {campaign_ideas_file}"
+        prompt_ext += f"Campaign ideas file path: {campaign_ideas_file}\n"
+    if attached_files_data:
+        prompt_ext += f"User's uploaded attachments data (use as reference data for Google Ads Campaign generation): {attached_files_data}\n"
     
     full_prompt = ""
     if prompt_ext:
         full_prompt = f"SYSTEM: {prompt_ext}\n\nUSER: {prompt}"
     else:
         full_prompt = prompt
-
 
     response = await agent.run(user_msg=full_prompt, ctx=context, memory=memory)
     return jsonify({"response": str(response)}), 200

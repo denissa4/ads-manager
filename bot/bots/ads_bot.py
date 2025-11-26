@@ -3,10 +3,10 @@
 
 from typing import List
 import aiohttp
-from botbuilder.core import ActivityHandler, MessageFactory, TurnContext
+import os
+from botbuilder.core import ActivityHandler, TurnContext
 from botbuilder.schema import ChannelAccount, Attachment, Activity
-
-
+from botframework.connector.auth import MicrosoftAppCredentials
 
 
 
@@ -21,12 +21,24 @@ class AdsBot(ActivityHandler):
                                                 'To get started type "authenticate" into the chat to authorise the use of the Google Ads API.')
                 
 
-    async def send_to_backend(self, prompt: str, user_id: str) -> str:
+    async def send_to_backend(self, prompt: str, user_id: str, attachments: list) -> str:
         url = "http://127.0.0.1:8000/prompt"
+
+        # Convert Attachment objects to dicts
+        serialized_attachments = []
+        for att in attachments:
+            serialized_attachments.append({
+                "contentType": att.content_type,
+                "contentUrl": getattr(att, "content_url", None),
+                "name": getattr(att, "name", None),
+                "content": getattr(att, "content", None),
+            })
+
         payload = {
             "prompt": prompt,
-            "user_id": user_id
-            }
+            "user_id": user_id,
+            "attachments": serialized_attachments,
+        }
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -44,8 +56,9 @@ class AdsBot(ActivityHandler):
 
         user_prompt = turn_context.activity.text
         user_id = turn_context.activity.from_property.id
+        attachments = turn_context.activity.attachments or []
 
-        response = await self.send_to_backend(user_prompt, user_id)
+        response = await self.send_to_backend(user_prompt, user_id, attachments)
 
         response_card = {
             "type": "AdaptiveCard",
