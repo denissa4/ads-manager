@@ -81,7 +81,6 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
                     "seed_word": seed_word  # track which seed word produced it
                 })
             await asyncio.sleep(1)
-            await asyncio.sleep(1)
 
         if not results:
             return "No keyword data found for the provided search terms. Please try different keywords."
