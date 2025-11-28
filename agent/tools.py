@@ -81,6 +81,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
                     "seed_word": seed_word  # track which seed word produced it
                 })
             await asyncio.sleep(1)
+            await asyncio.sleep(1)
 
         if not results:
             return "No keyword data found for the provided search terms. Please try different keywords."
@@ -94,7 +95,6 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
             f"Keyword search data:\n{str(results)}."
         )
 
-        print(len(res.split()))
         return res
 
     except Exception as e:
@@ -105,14 +105,14 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
 async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_ideas: int) -> str:
     '''
     Uses an LLM to generate n Google Ads Campaign ideas based on the given reference data. Keyword searches and user uploads are automatically given to the LLM.
-    Use additional_notes for any requests the user has about the campaign idea generation.
+    Use additional_notes for any requests the user has about the campaign idea generation or any additional instructions you have for the ideas generation AI.
     '''
     try:
         llm = await core.get_llm()
 
         reference_data_file_paths = []
         keywords_file = await ctx.store.get('keywords_search_file', '')
-        uploaded_files = await ctx.store.get('uploaded_files', '')
+        uploaded_files = await ctx.store.get('uploaded_files', [])
 
         if keywords_file:
             reference_data_file_paths.append(keywords_file)
@@ -140,6 +140,7 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
             f"based on the user's reference data.\n\nUse these guidlines as a reference:\n\n{content_gen_prompt}\n\n"
             f"Your campaign ideas should follow this exact layout example:\n\n{campaign_ideas_example}, be sure strictly to adhere to these rules when creating the template:\n\n{template_instructions}\nAdditional Notes:\n{additional_notes}\n"
             "Final URL should be https://www.example.com for all campaigns."
+            "YOU MUST STRICTLY ADHERE TO CHARACTER LIMITS FOR HEADLINES (MAX 28 chars) AND DESCRIPTIONS (MAX 80 chars)."
         )
 
         messages = [
@@ -152,7 +153,7 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
         download_url, file_path = await run_blocking(create_ads_campaign_file, str(response))
         await ctx.store.set('campaign_ideas_file', file_path)
 
-        return f"Google Ads Campaign ideas download URL: {download_url}. Next see if the user would like to select a campaign from the generated ideas and use the generate_search_campaign function to do this"
+        return f"Google Ads Campaign ideas download URL for user: {download_url}.\n\nCampaign ideas file contents:\n{str(response)}\n\nNext see if the user would like to select a campaign from the generated ideas and use the generate_search_campaign function to do this."
     except Exception as e:
         print(e)
         return f"Error generating campaign ideas: {e}"
@@ -168,6 +169,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
     - Responsive Search Ad
     """
     try:
+        await asyncio.sleep(3)
         # --- Load authentication ---
         refresh_token = await ctx.store.get("google_refresh_token", "")
         customer_id = await ctx.store.get("google_customer_id", "")
@@ -415,6 +417,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
             customer_id=customer_id,
             operations=[ad_operation],
         )
+        await asyncio.sleep(3)
 
         return (
             "Search campaign created successfully!\n"

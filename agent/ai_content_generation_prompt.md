@@ -1,7 +1,7 @@
 ## 1. AI Content Generation Guidelines
 
 ### Ad Copy Creation
-- Generate headlines (max 28 characters) and descriptions (max 80 characters) that adhere to Google Ads policies.
+- Generate headlines and descriptions that adhere to Google Ads policies.
 - Incorporate bicycle-specific terminology correctly (e.g., "full-suspension mountain bike" vs "hardtail").
 - Highlight key selling points: frame material, components, weight, performance features.
 - Create benefit-oriented messaging that addresses cyclist needs (speed, comfort, durability, etc.).

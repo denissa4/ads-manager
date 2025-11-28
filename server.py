@@ -1,4 +1,5 @@
-from quart import Quart, request, jsonify, redirect, render_template_string
+from quart import Quart, request, jsonify, redirect, render_template_string, make_response
+from llama_index.core.agent.workflow import AgentStream, ToolCall
 from agent.core import create_agent
 from helpers.google_ads_token import get_google_ads_auth_url, get_google_ads_token
 from helpers.azure_tables import get_user_data, store_user_data
@@ -6,6 +7,7 @@ from helpers.file_helpers import handle_attachments
 import asyncio
 import os
 import time
+import json
 
 
 app = Quart(__name__)
@@ -30,7 +32,7 @@ async def cleanup_inactive_sessions():
                 _, context, _, _, _ = user_agents[user_id]
                 keywords_file = await context.store.get('keywords_search_file', '')
                 campaign_ideas_file = await context.store.get('campaign_ideas_file', '')
-                uploaded_files = await context.store.get('uploaded_files') or []
+                uploaded_files = await context.store.get('uploaded_files', [])
                 if keywords_file:
                     os.remove(keywords_file)
                 if campaign_ideas_file:
@@ -46,6 +48,18 @@ async def cleanup_inactive_sessions():
 async def startup_tasks():
     app.add_background_task(cleanup_inactive_sessions)
     print("Clean-up task running...")
+
+
+async def stream_response(agent, full_prompt, context, memory):
+    handler = agent.run(user_msg=full_prompt, ctx=context, memory=memory)
+    async for event in handler.stream_events():
+        if isinstance(event, AgentStream):
+            if event.delta:
+                yield "".join(event.delta)
+        elif isinstance(event, ToolCall):
+            yield "\n\n"
+            yield f"**Using tool: {event.tool_name}**"
+            yield "\n\n"
 
 
 # Main messaging endpoint 
@@ -131,8 +145,20 @@ async def prompt():
     else:
         full_prompt = prompt
 
-    response = await agent.run(user_msg=full_prompt, ctx=context, memory=memory)
-    return jsonify({"response": str(response)}), 200
+    async def generate():
+        try:
+            async for chunk in stream_response(agent, full_prompt, context, memory):
+                if chunk:
+                    yield (json.dumps({"response": chunk}) + "\n").encode("utf-8")
+                    await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            yield json.dumps({"response": "stream cancelled"}) + "\n"
+        except Exception as e:
+            yield json.dumps({"response": str(e)}) + "\n"
+
+    res = await make_response(generate())
+    res.timeout = None
+    return res
 
 
 @app.route("/authenticate")

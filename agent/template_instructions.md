@@ -15,7 +15,7 @@
 
 ## Headlines section:
 
-- Headlines **must be a maximum of 28 characters or less (including spaces)**
+- Headlines **MUST be a MAXIMUM OF 28 CHARACTERS or less (including spaces)**
 - Generate 10 to 15 Headlines
 - Be sure to use **popular** keywords (ones with high monthly searches) in your Headlines based on the given reference data
 - Make Headlines are very unique
@@ -23,7 +23,7 @@
 
 ## Descriptions section:
 
-- Descriptions **must be a maximumm of 80 characters or less (including spaces)**
+- Descriptions **MUST be a MAXIMUM OF 80 ChARACTERS or less (including spaces)**
 - Generate 3 to 4 Descriptions
 - Make Descriptions are very unique
 
