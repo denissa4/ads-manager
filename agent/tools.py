@@ -11,6 +11,7 @@ from . import core
 import os
 import re
 import time
+from urllib.parse import quote
 
 
 DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
@@ -19,6 +20,25 @@ CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 MANAGER_ID = os.getenv("GOOGLE_ADS_MANAGER_ID")
 
 APP_URL = os.getenv("APP_URL", "")
+
+async def get_google_client(ctx: Context):
+    refresh_token = await ctx.store.get("google_refresh_token", "")
+    customer_id = await ctx.store.get('google_customer_id', "")
+    user_id = await ctx.store.get("user_id", "")
+
+    if not refresh_token or not customer_id:
+        return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?user_id={quote(user_id, safe='')}"
+
+    credentials = {
+        "developer_token": DEVELOPER_TOKEN,
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "use_proto_plus": True,
+        "login_customer_id": MANAGER_ID
+    }
+
+    return GoogleAdsClient.load_from_dict(credentials)
 
 
 async def run_blocking(func, *args, **kwargs):
@@ -72,23 +92,11 @@ async def get_data_from_urls(ctx: Context, urls: list) -> str:
 async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
     '''Conducts a Google Ads Keyword search and returns keyword stats, 100 results per input keyword.'''
     try:
-        refresh_token = await ctx.store.get("google_refresh_token", "")
-        customer_id = await ctx.store.get('google_customer_id', "")
-        user_id = await ctx.store.get("user_id", "")
-
-        if not refresh_token or not customer_id:
-            return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?user_id={user_id}"
-
-        credentials = {
-            "developer_token": DEVELOPER_TOKEN,
-            "refresh_token": refresh_token,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "use_proto_plus": True,
-            "login_customer_id": MANAGER_ID
-        }
-
-        client = GoogleAdsClient.load_from_dict(credentials)
+        client = await get_google_client(ctx)
+        # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+        if isinstance(client, str):
+            return client
+        
         keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
 
         language_id = "1000"  # English
@@ -211,23 +219,13 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
     """
     try:
         await asyncio.sleep(3)
-        # --- Load authentication ---
-        refresh_token = await ctx.store.get("google_refresh_token", "")
+
         customer_id = await ctx.store.get("google_customer_id", "")
-        user_id = await ctx.store.get("user_id", "")
 
-        if not refresh_token or not customer_id:
-            return f"Authenticate here: {APP_URL}/authenticate?user_id={user_id}"
-
-        credentials = {
-            "developer_token": DEVELOPER_TOKEN,
-            "refresh_token": refresh_token,
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "use_proto_plus": True,
-            "login_customer_id": MANAGER_ID,
-        }
-        client = GoogleAdsClient.load_from_dict(credentials)
+        client = await get_google_client(ctx)
+        # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+        if isinstance(client, str):
+            return client
 
         ideas_file = await ctx.store.get('campaign_ideas_file', '')
         if not ideas_file:
@@ -480,26 +478,12 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
 
 async def get_all_google_ads_campaign_details(ctx: Context):
     """Fetch ALL campaigns along with their ad groups, ads, and keywords using separate queries."""
-    refresh_token = await ctx.store.get("google_refresh_token", "")
     customer_id = await ctx.store.get("google_customer_id", "")
-    user_id = await ctx.store.get("user_id", "")
 
-    if not refresh_token or not customer_id:
-        return (
-            f"To use this tool, the user must authenticate via this link: "
-            f"{APP_URL}/authenticate?user_id={user_id}"
-        )
-
-    credentials = {
-        "developer_token": DEVELOPER_TOKEN,
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "use_proto_plus": True,
-        "login_customer_id": MANAGER_ID,
-    }
-
-    client = GoogleAdsClient.load_from_dict(credentials)
+    client = await get_google_client(ctx)
+    # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+    if isinstance(client, str):
+        return client
     ga_service = client.get_service("GoogleAdsService")
 
     def fetch_all_details_sync():
@@ -616,26 +600,12 @@ async def manage_ad_group_keywords(ctx: Context, ad_group_id: str, add_keywords:
     add_keywords = add_keywords or []
     remove_keywords = remove_keywords or []
 
-    refresh_token = await ctx.store.get("google_refresh_token", "")
     customer_id = await ctx.store.get("google_customer_id", "")
-    user_id = await ctx.store.get("user_id", "")
 
-    if not refresh_token or not customer_id:
-        return (
-            f"To use this tool, the user must authenticate via this link: "
-            f"{APP_URL}/authenticate?user_id={user_id}"
-        )
-
-    credentials = {
-        "developer_token": DEVELOPER_TOKEN,
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "use_proto_plus": True,
-        "login_customer_id": MANAGER_ID,
-    }
-
-    client = GoogleAdsClient.load_from_dict(credentials)
+    client = await get_google_client(ctx)
+    # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+    if isinstance(client, str):
+        return client
     ad_group_criterion_service = client.get_service("AdGroupCriterionService")
     ad_group_service = client.get_service("AdGroupService")
 
@@ -711,25 +681,12 @@ async def manage_ad_group_ads(ctx: Context, ad_group_id: str, create_ads: list, 
     create_ads = create_ads or []
     remove_ad_ids = remove_ad_ids or []
 
-    refresh_token = await ctx.store.get("google_refresh_token", "")
     customer_id = await ctx.store.get("google_customer_id", "")
-    user_id = await ctx.store.get("user_id", "")
 
-    if not refresh_token or not customer_id:
-        return {
-            "error": f"Authenticate via {APP_URL}/authenticate?user_id={user_id}"
-        }
-
-    credentials = {
-        "developer_token": DEVELOPER_TOKEN,
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "use_proto_plus": True,
-        "login_customer_id": MANAGER_ID,
-    }
-
-    client = GoogleAdsClient.load_from_dict(credentials)
+    client = await get_google_client(ctx)
+    # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+    if isinstance(client, str):
+        return client
     ad_group_ad_service = client.get_service("AdGroupAdService")
     ad_group_service = client.get_service("AdGroupService")
 
@@ -795,26 +752,12 @@ async def manage_ad_groups(ctx: Context, campaign_id: str, create_ad_groups:list
     create_ad_groups = create_ad_groups or []
     remove_ad_group_ids = remove_ad_group_ids or []
 
-    refresh_token = await ctx.store.get("google_refresh_token", "")
     customer_id = await ctx.store.get("google_customer_id", "")
-    user_id = await ctx.store.get("user_id", "")
 
-    if not refresh_token or not customer_id:
-        return (
-            f"To use this tool, the user must authenticate via this link: "
-            f"{APP_URL}/authenticate?user_id={user_id}"
-        )
-
-    credentials = {
-        "developer_token": DEVELOPER_TOKEN,
-        "refresh_token": refresh_token,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "use_proto_plus": True,
-        "login_customer_id": MANAGER_ID,
-    }
-
-    client = GoogleAdsClient.load_from_dict(credentials)
+    client = await get_google_client(ctx)
+    # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
+    if isinstance(client, str):
+        return client
     ad_group_service = client.get_service("AdGroupService")
 
     def sync_manage_ad_groups():

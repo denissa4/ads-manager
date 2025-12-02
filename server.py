@@ -8,6 +8,7 @@ import asyncio
 import os
 import time
 import json
+from urllib.parse import quote, unquote
 
 
 app = Quart(__name__)
@@ -81,7 +82,8 @@ async def prompt():
     # "autheticate" command to authenticate user's Google Ads API
     if prompt.lower() == "authenticate":
         BASE_URL = os.getenv("APP_URL", "")
-        user_auth_url = f"{BASE_URL}/authenticate?user_id={user_id}"
+        safe_user_id = quote(user_id, safe='')
+        user_auth_url = f"{BASE_URL}/authenticate?user_id={safe_user_id}"
         return jsonify({"response": f"Please follow this link to authenticate: [Authenticate]({user_auth_url})"}), 200
     
     # Check for existing user agent session or create a new one.
@@ -165,6 +167,7 @@ async def prompt():
 @app.route("/authenticate")
 async def authenticate():
     user_id = request.args.get("user_id")
+    user_id = unquote(user_id)
 
     auth_url, state = await get_google_ads_auth_url()
 
