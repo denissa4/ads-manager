@@ -1,13 +1,17 @@
 import asyncio
+import aiohttp
 import functools
 from google.ads.googleads.client import GoogleAdsClient
+from google.ads.googleads.v22.common.types import AdTextAsset
+from google.ads.googleads.v22.enums.types import AdGroupAdStatusEnum
 from llama_index.core.workflow import Context
 from llama_index.core.llms import ChatMessage
-from helpers.file_helpers import create_keyword_report_file, file_to_text, create_ads_campaign_file, sanitize_text
+from helpers.file_helpers import create_keyword_report_file, file_to_text, create_ads_campaign_file, sanitize_text, text_to_file
 from . import core
 import os
 import re
 import time
+
 
 DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
 CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -25,6 +29,44 @@ async def run_blocking(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     partial = functools.partial(func, *args, **kwargs)
     return await loop.run_in_executor(None, partial)
+
+
+async def get_data_from_urls(ctx: Context, urls: list) -> str:
+    """Reads raw text data from URLs and saves to the user's data store."""
+    organized = ""
+    print(f"URLS: {urls}", flush=True)
+    try:
+        user_id = await ctx.store.get("user_id")
+        uploaded_files = await ctx.store.get("uploaded_files", [])
+
+        async with aiohttp.ClientSession() as session:
+            for url in urls:
+                try:
+                    async with session.get(url) as response:
+                        response.raise_for_status()
+                        data = await response.text()
+                except Exception as inner_e:
+                    print(f"Failed to fetch {url}: {inner_e}")
+                    continue
+                if not data:
+                    continue
+                # Prepare organized text
+                wrapped = f"URL:\n{url}\n\nContent:\n{data}\n"
+                organized += wrapped
+
+                # Save to file
+                local_path = text_to_file(user_id, wrapped, "url_data")
+
+                # Track uploaded files
+                uploaded_files.append(local_path)
+
+        print(uploaded_files, flush=True)
+
+        await ctx.store.set("uploaded_files", uploaded_files)
+        return organized
+    except Exception as e:
+        print(f"Error in get_data_from_urls: {e}")
+        return ""
 
 
 async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
@@ -138,7 +180,6 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
             f"You are a helpful assistant. Your job is to generate exactly {n_ideas} Google Ads Campaign ideas "
             f"based on the user's reference data.\n\nUse these guidlines as a reference:\n\n{content_gen_prompt}\n\n"
             f"Your campaign ideas should follow this exact layout example:\n\n{campaign_ideas_example}, be sure strictly to adhere to these rules when creating the template:\n\n{template_instructions}\nAdditional Notes:\n{additional_notes}\n"
-            "Final URL should be https://www.example.com for all campaigns."
             "YOU MUST STRICTLY ADHERE TO CHARACTER LIMITS FOR HEADLINES (MAX 28 chars) AND DESCRIPTIONS (MAX 80 chars)."
         )
 
@@ -159,6 +200,7 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
 
 
 async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
+    # TODO: Add URL options
     """
     Creates a fully detailed Google Search campaign with:
     - Budget extracted from ideas file
@@ -316,6 +358,10 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         after_descriptions = selected_block.split("Descriptions:", 1)[1]
         descriptions_section = after_descriptions.split("Final URL:", 1)[0]
 
+        final_url = selected_block.split("Final URL:", 1)[1].strip()
+        if final_url.startswith("- "):
+            final_url = final_url[2:]
+
         for line in keywords_section.strip().splitlines():
             line = line.strip()
             if not line:
@@ -392,7 +438,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         ad_group_ad.status = client.enums.AdGroupAdStatusEnum.PAUSED
 
         ad = client.get_type("Ad")
-        ad.final_urls.append("https://example.com")
+        ad.final_urls.append(final_url)
 
         rsa = client.get_type("ResponsiveSearchAdInfo")
 
@@ -430,3 +476,376 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
     except Exception as e:
         print(e)
         return f"Error creating search campaign: {e}"
+
+
+async def get_all_google_ads_campaign_details(ctx: Context):
+    """Fetch ALL campaigns along with their ad groups, ads, and keywords using separate queries."""
+    refresh_token = await ctx.store.get("google_refresh_token", "")
+    customer_id = await ctx.store.get("google_customer_id", "")
+    user_id = await ctx.store.get("user_id", "")
+
+    if not refresh_token or not customer_id:
+        return (
+            f"To use this tool, the user must authenticate via this link: "
+            f"{APP_URL}/authenticate?user_id={user_id}"
+        )
+
+    credentials = {
+        "developer_token": DEVELOPER_TOKEN,
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "use_proto_plus": True,
+        "login_customer_id": MANAGER_ID,
+    }
+
+    client = GoogleAdsClient.load_from_dict(credentials)
+    ga_service = client.get_service("GoogleAdsService")
+
+    def fetch_all_details_sync():
+        results = {"campaigns": {}}
+
+        # ----------------- 1. Campaigns + Ad Groups -----------------
+        query_campaigns = """
+            SELECT
+                campaign.id,
+                campaign.name,
+                campaign.status,
+                campaign.serving_status,
+                ad_group.id,
+                ad_group.name,
+                ad_group.status
+            FROM ad_group
+            WHERE campaign.status != 'REMOVED'
+            ORDER BY campaign.id, ad_group.id
+        """
+
+        stream = ga_service.search_stream(customer_id=customer_id, query=query_campaigns)
+        for batch in stream:
+            for row in batch.results:
+                c = row.campaign
+                ag = row.ad_group
+                campaign_id = c.id
+                ag_id = ag.id
+
+                if campaign_id not in results["campaigns"]:
+                    results["campaigns"][campaign_id] = {
+                        "id": c.id,
+                        "name": c.name,
+                        "status": getattr(c.status, "name", c.status),
+                        "serving_status": getattr(c.serving_status, "name", c.serving_status),
+                        "ad_groups": {}
+                    }
+
+                campaign = results["campaigns"][campaign_id]
+                if ag_id not in campaign["ad_groups"]:
+                    campaign["ad_groups"][ag_id] = {
+                        "id": ag.id,
+                        "name": ag.name,
+                        "status": getattr(ag.status, "name", ag.status),
+                        "ads": [],
+                        "keywords": []
+                    }
+
+        # ----------------- 2. Ads -----------------
+        for campaign_id, campaign in results["campaigns"].items():
+            for ag_id, ad_group in campaign["ad_groups"].items():
+                query_ads = f"""
+                    SELECT
+                        ad_group_ad.ad.id,
+                        ad_group_ad.status,
+                        ad_group_ad.ad.final_urls,
+                        ad_group_ad.ad.responsive_search_ad.headlines,
+                        ad_group_ad.ad.responsive_search_ad.descriptions
+                    FROM ad_group_ad
+                    WHERE ad_group_ad.ad_group = 'customers/{customer_id}/adGroups/{ag_id}'
+                """
+                stream_ads = ga_service.search_stream(customer_id=customer_id, query=query_ads)
+                for batch in stream_ads:
+                    for row in batch.results:
+                        ad_obj = row.ad_group_ad.ad
+                        ad_group["ads"].append({
+                            "id": ad_obj.id,
+                            "status": getattr(row.ad_group_ad, "status", None),
+                            "final_urls": list(ad_obj.final_urls),
+                            "headlines": [h.text for h in getattr(ad_obj.responsive_search_ad, "headlines", [])],
+                            "descriptions": [d.text for d in getattr(ad_obj.responsive_search_ad, "descriptions", [])],
+                        })
+
+        # ----------------- 3. Keywords -----------------
+        for campaign_id, campaign in results["campaigns"].items():
+            for ag_id, ad_group in campaign["ad_groups"].items():
+                query_keywords = f"""
+                    SELECT
+                        ad_group_criterion.keyword.text,
+                        ad_group_criterion.keyword.match_type,
+                        ad_group_criterion.status,
+                        ad_group_criterion.cpc_bid_micros
+                    FROM ad_group_criterion
+                    WHERE ad_group_criterion.type = KEYWORD
+                      AND ad_group_criterion.ad_group = 'customers/{customer_id}/adGroups/{ag_id}'
+                """
+                stream_kw = ga_service.search_stream(customer_id=customer_id, query=query_keywords)
+                for batch in stream_kw:
+                    for row in batch.results:
+                        kw = row.ad_group_criterion
+                        ad_group["keywords"].append({
+                            "text": kw.keyword.text,
+                            "match_type": getattr(kw.keyword.match_type, "name", kw.keyword.match_type),
+                            "status": getattr(kw, "status", None),
+                            "cpc_bid_micros": kw.cpc_bid_micros,
+                            "cpc_bid_gbp": kw.cpc_bid_micros / 1_000_000 if kw.cpc_bid_micros else None
+                        })
+
+        return results
+
+    return await run_blocking(fetch_all_details_sync)
+
+
+async def manage_ad_group_keywords(ctx: Context, ad_group_id: str, add_keywords: list, remove_keywords: list):
+    """
+    Add and/or remove keywords in a specific ad group.
+    
+    Parameters:
+    - ad_group_id: str, the ID of the ad group
+    - add_keywords: list of dicts [{"text": "keyword text", "match_type": "EXACT|PHRASE|BROAD", "cpc_bid_gbp": float}, ...]. Should be an empty list if none.
+    - remove_keywords: list of strings (keyword texts to remove). Should be an empty list if none.
+    
+    Returns: dict with 'added' and 'removed' keyword resource names
+    """
+    add_keywords = add_keywords or []
+    remove_keywords = remove_keywords or []
+
+    refresh_token = await ctx.store.get("google_refresh_token", "")
+    customer_id = await ctx.store.get("google_customer_id", "")
+    user_id = await ctx.store.get("user_id", "")
+
+    if not refresh_token or not customer_id:
+        return (
+            f"To use this tool, the user must authenticate via this link: "
+            f"{APP_URL}/authenticate?user_id={user_id}"
+        )
+
+    credentials = {
+        "developer_token": DEVELOPER_TOKEN,
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "use_proto_plus": True,
+        "login_customer_id": MANAGER_ID,
+    }
+
+    client = GoogleAdsClient.load_from_dict(credentials)
+    ad_group_criterion_service = client.get_service("AdGroupCriterionService")
+    ad_group_service = client.get_service("AdGroupService")
+
+    def sync_manage_keywords():
+        added = []
+        removed = []
+
+        # ---------- ADD KEYWORDS ----------
+        for kw in add_keywords:
+            operation = client.get_type("AdGroupCriterionOperation")
+            criterion = operation.create
+            criterion.ad_group = ad_group_service.ad_group_path(customer_id, ad_group_id)
+            criterion.keyword.text = kw["text"]
+            match_type_str = kw.get("match_type", "BROAD").upper()
+            criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type_str)
+            criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+
+            # Optional CPC bid
+            if kw.get("cpc_bid_gbp") is not None:
+                criterion.cpc_bid_micros = int(kw["cpc_bid_gbp"] * 1_000_000)
+
+            response = ad_group_criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id, operations=[operation]
+            )
+            added.append(response.results[0].resource_name)
+
+        # ---------- REMOVE KEYWORDS ----------
+        if remove_keywords:
+            # First fetch existing keywords in the ad group to find resource names
+            query = f"""
+                SELECT ad_group_criterion.criterion_id, ad_group_criterion.keyword.text
+                FROM ad_group_criterion
+                WHERE ad_group.id = {ad_group_id} AND ad_group_criterion.type = KEYWORD
+            """
+            ga_service = client.get_service("GoogleAdsService")
+            existing_kw = {}
+            stream = ga_service.search_stream(customer_id=customer_id, query=query)
+            for batch in stream:
+                for row in batch.results:
+                    existing_kw[row.ad_group_criterion.keyword.text] = row.ad_group_criterion.criterion_id
+
+            for text in remove_keywords:
+                if text in existing_kw:
+                    resource_name = ad_group_criterion_service.ad_group_criterion_path(
+                        customer_id, ad_group_id, existing_kw[text]
+                    )
+                    op = client.get_type("AdGroupCriterionOperation")
+                    op.remove = resource_name
+                    response = ad_group_criterion_service.mutate_ad_group_criteria(
+                        customer_id=customer_id, operations=[op]
+                    )
+                    removed.append(response.results[0].resource_name)
+
+        return {"added": added, "removed": removed}
+
+    return await run_blocking(sync_manage_keywords)
+
+
+async def manage_ad_group_ads(ctx: Context, ad_group_id: str, create_ads: list, remove_ad_ids: list):
+    """
+    Create and/or remove ads in a specific ad group (Responsive Search Ads only).
+
+    Parameters:
+    - ad_group_id: str, the ID of the ad group
+    - create_ads: list of dicts [
+        {"headlines": [str], "descriptions": [str], "final_urls": [str]}, ...
+      ]. Must have at least 3 headlines and 2 descriptions per ad.
+      Can be empty if none.
+    - remove_ad_ids: list of ad IDs (integers or strings) to remove. Can be empty if none.
+
+    Returns: dict with 'created' and 'removed' ad resource names
+    """
+    create_ads = create_ads or []
+    remove_ad_ids = remove_ad_ids or []
+
+    refresh_token = await ctx.store.get("google_refresh_token", "")
+    customer_id = await ctx.store.get("google_customer_id", "")
+    user_id = await ctx.store.get("user_id", "")
+
+    if not refresh_token or not customer_id:
+        return {
+            "error": f"Authenticate via {APP_URL}/authenticate?user_id={user_id}"
+        }
+
+    credentials = {
+        "developer_token": DEVELOPER_TOKEN,
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "use_proto_plus": True,
+        "login_customer_id": MANAGER_ID,
+    }
+
+    client = GoogleAdsClient.load_from_dict(credentials)
+    ad_group_ad_service = client.get_service("AdGroupAdService")
+    ad_group_service = client.get_service("AdGroupService")
+
+    def sync_manage_ads():
+        created = []
+        removed = []
+
+        # ---------- CREATE RSA ADS ----------
+        for ad in create_ads:
+            op = client.get_type("AdGroupAdOperation")
+            ad_obj = op.create
+            ad_obj.ad_group = ad_group_service.ad_group_path(customer_id, ad_group_id)
+
+            # Responsive Search Ad requires multiple headlines/descriptions
+            headlines = ad.get("headlines", [])
+            descriptions = ad.get("descriptions", [])
+            final_urls = ad.get("final_urls", [])
+
+            if len(headlines) < 3 or len(descriptions) < 2 or not final_urls:
+                raise ValueError(
+                    "Each Responsive Search Ad requires at least 3 headlines, "
+                    "2 descriptions, and 1 final URL."
+                )
+
+            for h in headlines:
+                ad_obj.ad.responsive_search_ad.headlines.append(AdTextAsset(text=h))
+            for d in descriptions:
+                ad_obj.ad.responsive_search_ad.descriptions.append(AdTextAsset(text=d))
+            ad_obj.ad.final_urls.extend(final_urls)
+            ad_obj.status = AdGroupAdStatusEnum.AdGroupAdStatus.ENABLED
+
+            resp = ad_group_ad_service.mutate_ad_group_ads(
+                customer_id=customer_id, operations=[op]
+            )
+            created.append(resp.results[0].resource_name)
+
+        # ---------- REMOVE ADS ----------
+        for ad_id in remove_ad_ids:
+            resource_name = ad_group_ad_service.ad_group_ad_path(customer_id, ad_group_id, ad_id)
+            op = client.get_type("AdGroupAdOperation")
+            op.remove = resource_name
+            resp = ad_group_ad_service.mutate_ad_group_ads(
+                customer_id=customer_id, operations=[op]
+            )
+            removed.append(resp.results[0].resource_name)
+
+        return {"created": created, "removed": removed}
+
+    return await run_blocking(sync_manage_ads)
+
+
+async def manage_ad_groups(ctx: Context, campaign_id: str, create_ad_groups:list, remove_ad_group_ids: list):
+    """
+    Create and/or remove ad groups in a specific campaign.
+
+    Parameters:
+    - campaign_id: str, the ID of the campaign
+    - create_ad_groups: list of dicts [{"name": str, "status": "ENABLED|PAUSED"}, ...]. Should be an empty list if none.
+    - remove_ad_group_ids: list of ad group IDs (integers or strings) to remove. Should be an empty list if none.
+
+    Returns: dict with 'created' and 'removed' ad group resource names
+    """
+    create_ad_groups = create_ad_groups or []
+    remove_ad_group_ids = remove_ad_group_ids or []
+
+    refresh_token = await ctx.store.get("google_refresh_token", "")
+    customer_id = await ctx.store.get("google_customer_id", "")
+    user_id = await ctx.store.get("user_id", "")
+
+    if not refresh_token or not customer_id:
+        return (
+            f"To use this tool, the user must authenticate via this link: "
+            f"{APP_URL}/authenticate?user_id={user_id}"
+        )
+
+    credentials = {
+        "developer_token": DEVELOPER_TOKEN,
+        "refresh_token": refresh_token,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "use_proto_plus": True,
+        "login_customer_id": MANAGER_ID,
+    }
+
+    client = GoogleAdsClient.load_from_dict(credentials)
+    ad_group_service = client.get_service("AdGroupService")
+
+    def sync_manage_ad_groups():
+        created = []
+        removed = []
+
+        # ---------- CREATE AD GROUPS ----------
+        for ag in create_ad_groups:
+            operation = client.get_type("AdGroupOperation")
+            ad_group = operation.create
+            ad_group.name = ag["name"]
+            ad_group.campaign = ad_group_service.campaign_path(customer_id, campaign_id)
+            status_str = ag.get("status", "ENABLED").upper()
+            ad_group.status = getattr(client.enums.AdGroupStatusEnum, status_str)
+
+            response = ad_group_service.mutate_ad_groups(
+                customer_id=customer_id, operations=[operation]
+            )
+            created.append(response.results[0].resource_name)
+
+        # ---------- REMOVE AD GROUPS ----------
+        for ag_id in remove_ad_group_ids:
+            resource_name = ad_group_service.ad_group_path(customer_id, ag_id)
+            op = client.get_type("AdGroupOperation")
+            op.remove = resource_name
+            response = ad_group_service.mutate_ad_groups(
+                customer_id=customer_id, operations=[op]
+            )
+            removed.append(response.results[0].resource_name)
+
+        return {"created": created, "removed": removed}
+
+    return await run_blocking(sync_manage_ad_groups)
+

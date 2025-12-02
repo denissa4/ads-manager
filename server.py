@@ -88,6 +88,7 @@ async def prompt():
     async with user_agents_lock:
         if user_id not in user_agents:
             agent, context, memory = await create_agent()
+            await context.store.set('user_id', user_id)
             user_agents[user_id] = (agent, context, memory, {}, time.time())
         else:
             # Update timestamp

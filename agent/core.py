@@ -24,7 +24,14 @@ async def create_agent():
             system_prompt = f.read()
 
         agent = FunctionAgent(
-            tools=[tools.google_ads_keyword_search, tools.create_campaign_ideas_report, tools.generate_search_campaign],
+            tools=[tools.google_ads_keyword_search, 
+                   tools.create_campaign_ideas_report, 
+                   tools.generate_search_campaign, 
+                   tools.get_data_from_urls, 
+                   tools.get_all_google_ads_campaign_details, 
+                   tools.manage_ad_group_ads, 
+                   tools.manage_ad_groups,
+                   tools.manage_ad_group_keywords],
             llm=llm,
             system_prompt=system_prompt,
         )

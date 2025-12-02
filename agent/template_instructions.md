@@ -12,6 +12,7 @@
 - Only include the median CPC calculated from the data.
 - Do NOT leave the CPC in £, do NOT invent values.
 - Example format: electric bikes {1800000}
+- CPC must be at least 100000 micros and **cannot be '0'**
 
 ## Headlines section:
 
@@ -30,3 +31,4 @@
 ## Other Notes:
 
 - Be sure to seperate each campaign idea using "---" as a seperator.
+- If the user's data contains a product URL use this as "Final URL", otherwise use "https://www.example.com" as a placeholder.

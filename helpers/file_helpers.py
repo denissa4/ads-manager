@@ -5,7 +5,6 @@ import asyncio
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, Alignment
-from botframework.connector.auth import MicrosoftAppCredentials
 import pandas as pd
 import docx
 import pdfplumber
@@ -95,7 +94,7 @@ def file_to_text(file_path: str) -> str:
         df = pd.read_csv(file_path)
         return df.to_csv(index=False)
     
-    elif file_path.endswith('.txt'):
+    elif file_path.endswith(('.txt', 'html', 'htm')):
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
     
@@ -112,7 +111,28 @@ def file_to_text(file_path: str) -> str:
     
     else:
         raise ValueError("Unsupported file type")
-    
+
+
+def text_to_file(user_id: str, text_data: str, filename: str) -> str:
+    try:
+        os.makedirs(f"{USER_UPLOADS_DIR}/{user_id}", exist_ok=True)
+
+        file_uid = str(uuid.uuid4().hex[:6])
+        local_path = f"{USER_UPLOADS_DIR}/{user_id}/{file_uid}_{filename}.txt"
+        print(f"Local Path: {local_path}", flush=True)
+        with open(local_path, 'w') as f:
+            f.write(text_data)
+        return local_path
+    except:
+        try:
+            local_path = f"{USER_UPLOADS_DIR}/{user_id}/{file_uid}.txt"
+            with open(local_path, 'w') as f:
+                f.write(text_data)
+            return local_path
+        except Exception as e:
+            raise e
+
+
 
 def sanitize_text(text: str) -> str:
     # Remove prohibited symbols
