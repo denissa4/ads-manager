@@ -156,7 +156,7 @@ class AdsBot(ActivityHandler):
                     try:
                         await turn_context.update_activity(update_activity)
                     except:
-                        await turn_context.send_activity(MessageFactory.text(output_text))
+                        await turn_context.send_activity(MessageFactory.text(chunk))
             if not STREAMING:
                 try:
                     await turn_context.update_activity(update_activity)
