@@ -153,9 +153,14 @@ class AdsBot(ActivityHandler):
                     attachments=[updated_attachment]
                 )
                 if STREAMING:
-                    await turn_context.update_activity(update_activity)
-
+                    try:
+                        await turn_context.update_activity(update_activity)
+                    except:
+                        await turn_context.send_activity(MessageFactory.text(output_text))
             if not STREAMING:
-                await turn_context.update_activity(update_activity)
+                try:
+                    await turn_context.update_activity(update_activity)
+                except:
+                    await turn_context.send_activity(MessageFactory.text(output_text))
         except Exception as e:
             await turn_context.send_activity(str(e))
