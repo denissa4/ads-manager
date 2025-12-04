@@ -11,7 +11,7 @@ from . import core
 import os
 import re
 import time
-from urllib.parse import quote
+import base64
 
 
 DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
@@ -27,9 +27,8 @@ async def get_google_client(ctx: Context):
     user_id = await ctx.store.get("user_id", "")
 
     if not refresh_token or not customer_id:
-        safe_for_markdown = user_id.replace("_", "\\_")
-        safe_user_id = quote(safe_for_markdown, safe='')
-        return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?user_id={safe_user_id}"
+        url_safe_id = base64.urlsafe_b64encode(user_id.encode()).decode()
+        return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?userId={url_safe_id}"
 
     credentials = {
         "developer_token": DEVELOPER_TOKEN,
