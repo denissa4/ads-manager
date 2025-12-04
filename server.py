@@ -58,9 +58,7 @@ async def stream_response(agent, full_prompt, context, memory):
             if event.delta:
                 yield "".join(event.delta)
         elif isinstance(event, ToolCall):
-            yield "\n\n"
-            yield f"**Using tool: {event.tool_name}**"
-            yield "\n\n"
+            yield f"\n\n**Using tool: {event.tool_name.replace("_", "-")}**\n\n"
 
 
 # Main messaging endpoint 
