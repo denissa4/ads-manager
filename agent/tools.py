@@ -27,7 +27,9 @@ async def get_google_client(ctx: Context):
     user_id = await ctx.store.get("user_id", "")
 
     if not refresh_token or not customer_id:
-        return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?user_id={quote(user_id, safe='')}"
+        safe_for_markdown = user_id.replace("_", "\\_")
+        safe_user_id = quote(safe_for_markdown, safe='')
+        return f"To use this tool, the user must authenticate via this link: {APP_URL}/authenticate?user_id={safe_user_id}"
 
     credentials = {
         "developer_token": DEVELOPER_TOKEN,
@@ -96,6 +98,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
         # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
         if isinstance(client, str):
             return client
+        customer_id = await ctx.store.get("google_customer_id", "")
         
         keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
 
@@ -148,7 +151,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
 
     except Exception as e:
         print(e)
-        return f"{str(e)}\n\nIf the error is about authentication, the user must authenticate via this link: {APP_URL}/authenticate?user_id={user_id}"
+        return f"Error conducting keyword search: {str(e)}"
 
 
 async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_ideas: int) -> str:
