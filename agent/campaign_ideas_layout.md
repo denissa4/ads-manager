@@ -1,4 +1,4 @@
-Idea #X: <Campaign Name>
+# Idea #X: <Campaign Name>
 Budget: £<number>/day
 
 Summary:

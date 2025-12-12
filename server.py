@@ -75,7 +75,7 @@ async def prompt():
             if user_id in user_agents:
                 agent, context, memory = await create_agent()
                 user_agents[user_id] = (agent, context, memory, {}, time.time())
-                return jsonify({"response": "Chat history has been refreshed."}), 200
+            return jsonify({"response": "Chat history has been refreshed."}), 200
 
     # "autheticate" command to authenticate user's Google Ads API
     if prompt.lower() == "authenticate":
@@ -134,7 +134,7 @@ async def prompt():
     campaign_ideas_file = await context.store.get('campaign_ideas_file', '')
 
     if keywords_file:
-        prompt_ext += f"Keyword search file path (use as reference data for Google Ads Campaign generation): {keywords_file}\n"
+        prompt_ext += f"Keyword search file path (use as reference data for Google Ads Campaign generation and adding keywords to existing ads.): {keywords_file}\n"
     if campaign_ideas_file:
         prompt_ext += f"Campaign ideas file path: {campaign_ideas_file}\n"
     if attached_files_data:
@@ -151,7 +151,7 @@ async def prompt():
             async for chunk in stream_response(agent, full_prompt, context, memory):
                 if chunk:
                     yield (json.dumps({"response": chunk}) + "\n").encode("utf-8")
-                    await asyncio.sleep(0)
+                    await asyncio.sleep(0.15)
         except asyncio.CancelledError:
             yield json.dumps({"response": "stream cancelled"}) + "\n"
         except Exception as e:

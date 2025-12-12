@@ -31,7 +31,9 @@ async def create_agent():
                    tools.get_all_google_ads_campaign_details, 
                    tools.manage_ad_group_ads, 
                    tools.manage_ad_groups,
-                   tools.manage_ad_group_keywords],
+                   tools.manage_ad_group_keywords,
+                   tools.read_campaign_ideas_names,
+                   tools.adjust_campaign_budget],
             llm=llm,
             system_prompt=system_prompt,
         )

@@ -4,6 +4,7 @@ import functools
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.v22.common.types import AdTextAsset
 from google.ads.googleads.v22.enums.types import AdGroupAdStatusEnum
+from google.protobuf.field_mask_pb2 import FieldMask
 from llama_index.core.workflow import Context
 from llama_index.core.llms import ChatMessage
 from helpers.file_helpers import create_keyword_report_file, file_to_text, create_ads_campaign_file, sanitize_text, text_to_file
@@ -55,7 +56,6 @@ async def run_blocking(func, *args, **kwargs):
 async def get_data_from_urls(ctx: Context, urls: list) -> str:
     """Reads raw text data from URLs and saves to the user's data store."""
     organized = ""
-    print(f"URLS: {urls}", flush=True)
     try:
         user_id = await ctx.store.get("user_id")
         uploaded_files = await ctx.store.get("uploaded_files", [])
@@ -81,36 +81,34 @@ async def get_data_from_urls(ctx: Context, urls: list) -> str:
                 # Track uploaded files
                 uploaded_files.append(local_path)
 
-        print(uploaded_files, flush=True)
-
         await ctx.store.set("uploaded_files", uploaded_files)
         return organized
     except Exception as e:
         print(f"Error in get_data_from_urls: {e}")
         return ""
 
-
 async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
-    '''Conducts a Google Ads Keyword search and returns keyword stats, 100 results per input keyword.'''
+    """Conducts a Google Ads Keyword search and returns keyword stats, up to 2000 total results."""
     try:
         client = await get_google_client(ctx)
-        # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
         if isinstance(client, str):
             return client
-        customer_id = await ctx.store.get("google_customer_id", "")
         
+        customer_id = await ctx.store.get("google_customer_id", "")
         keyword_plan_idea_service = client.get_service("KeywordPlanIdeaService")
 
         language_id = "1000"  # English
         language_resource_name = f"languageConstants/{language_id}"
 
-        uk_geo_target_id = "2840"  # UK
+        uk_geo_target_id = "2840"
         geo_target_resource_name = f"geoTargetConstants/{uk_geo_target_id}"
 
         results = []
 
+        # Limit per keyword
+        per_seed_limit = max(1, 2000 // len(keywords))
+
         for seed_word in keywords:
-            # Build request per keyword
             request = client.get_type("GenerateKeywordIdeasRequest")
             request.customer_id = customer_id
             request.keyword_plan_network = client.enums.KeywordPlanNetworkEnum.GOOGLE_SEARCH_AND_PARTNERS
@@ -119,9 +117,12 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
             request.keyword_seed.keywords.append(seed_word)
 
             response = await run_blocking(keyword_plan_idea_service.generate_keyword_ideas, request=request)
-            
-            # Limit to 100 results per seed word
-            for idea in list(response)[:100]:
+            ideas = list(response)
+
+            # Apply limit safely, no index error
+            limited_ideas = ideas[:per_seed_limit]
+
+            for idea in limited_ideas:
                 metrics = idea.keyword_idea_metrics
                 results.append({
                     "keyword": idea.text,
@@ -130,23 +131,22 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
                     "low_top_of_page_bid": metrics.low_top_of_page_bid_micros,
                     "high_top_of_page_bid": metrics.high_top_of_page_bid_micros,
                     "competition_index": metrics.competition_index,
-                    "seed_word": seed_word  # track which seed word produced it
+                    "seed_word": seed_word
                 })
+
             await asyncio.sleep(1)
 
         if not results:
-            return "No keyword data found for the provided search terms. Please try different keywords."
+            return "No keyword data found for the provided search terms."
 
         report_download_url, report_file_path = await create_keyword_report_file(results)
         await ctx.store.set('keywords_search_file', report_file_path)
 
-        res = (
+        return (
             f"In-depth keyword statistics spreadsheet download URL:\n{report_download_url}\n\n"
             f"Keyword search data file path:\n{report_file_path}\n\n"
             f"Keyword search data:\n{str(results)}."
         )
-
-        return res
 
     except Exception as e:
         print(e)
@@ -209,23 +209,36 @@ async def create_campaign_ideas_report(ctx: Context, additional_notes: str, n_id
         return f"Error generating campaign ideas: {e}"
 
 
+async def read_campaign_ideas_names(ctx: Context) -> list:
+    try:
+        file = await ctx.store.get("campaign_ideas_file")
+        ideas = await run_blocking(file_to_text, file)
+        ideas = ideas.split("\n")
+
+        idea_titles = [line for line in ideas if "# Idea" in line]
+
+        if idea_titles:
+            return idea_titles
+        else:
+            return "There are no campaign ideas available."
+    except Exception as e:
+        return f"There was an error: {e}"
+
+
 async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
-    # TODO: Add URL options
     """
     Creates a fully detailed Google Search campaign with:
     - Budget extracted from ideas file
     - Campaign settings
     - Ad group
     - Keywords
+    - Negative Keywords
     - Responsive Search Ad
     """
     try:
         await asyncio.sleep(3)
-
         customer_id = await ctx.store.get("google_customer_id", "")
-
         client = await get_google_client(ctx)
-        # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
         if isinstance(client, str):
             return client
 
@@ -248,7 +261,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
             return "Could not extract campaign section."
 
         # ---------------------------------------------------------------------
-        # 1. Extract Budget From Idea Block
+        # 1. Extract Budget
         # ---------------------------------------------------------------------
         budget_match = re.search(
             r"Budget:\s*£?(\d+(?:\.\d+)?)(?:\s*/\s*day)?",
@@ -259,7 +272,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         budget_micros = int(budget_daily * 1_000_000)
 
         # ---------------------------------------------------------------------
-        # 2. Create Campaign Budget (unique name)
+        # 2. Create Campaign Budget
         # ---------------------------------------------------------------------
         budget_service = client.get_service("CampaignBudgetService")
         budget_operation = client.get_type("CampaignBudgetOperation")
@@ -268,7 +281,6 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
         budget.amount_micros = budget_micros
 
-        # mutate_campaign_budgets is blocking (network) -> run in executor
         budget_response = await run_blocking(
             budget_service.mutate_campaign_budgets,
             customer_id=customer_id,
@@ -287,23 +299,12 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         campaign.advertising_channel_type = client.enums.AdvertisingChannelTypeEnum.SEARCH
         campaign.campaign_budget = budget_resource_name
         campaign.contains_eu_political_advertising = (
-            client.enums.EuPoliticalAdvertisingStatusEnum
-            .DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
+            client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
         )
-
-        # Manual CPC bidding (enhanced CPC disabled)
         campaign.manual_cpc.enhanced_cpc_enabled = False
-
-        # Networks
         campaign.network_settings.target_google_search = True
         campaign.network_settings.target_search_network = True
         campaign.network_settings.target_partner_search_network = False
-
-        # Languages & Targeting restrictions
-        targeting = client.get_type("TargetRestriction")  # create TargetRestriction
-        targeting.targeting_dimension = client.enums.TargetingDimensionEnum.AUDIENCE
-        targeting.bid_only = False
-        campaign.targeting_setting.target_restrictions.append(targeting)
 
         # Geo Targeting: UK
         geo_target_constant_service = client.get_service("GeoTargetConstantService")
@@ -313,7 +314,6 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
             client.enums.PositiveGeoTargetTypeEnum.PRESENCE_OR_INTEREST
         )
 
-        # Create campaign (network RPC) -> run in executor
         campaign_response = await run_blocking(
             campaign_service.mutate_campaigns,
             customer_id=customer_id,
@@ -339,76 +339,64 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         ad_group_resource = ad_group_response.results[0].resource_name
 
         # ---------------------------------------------------------------------
-        # 5. Add Keywords
+        # 5. Extract Keywords, Negative Keywords, Headlines, Descriptions, Final URL
         # ---------------------------------------------------------------------
-        keyword_service = client.get_service("AdGroupCriterionService")
+        def extract_section(text, section_name, next_section_name=None):
+            section = text.split(f"{section_name}:", 1)
+            if len(section) < 2:
+                return ""
+            content = section[1]
+            if next_section_name and next_section_name in content:
+                content = content.split(next_section_name, 1)[0]
+            return content.strip()
 
-        # Extract keywords, headlines and descriptions
+        keywords_section = extract_section(selected_block, "Keywords", "Negative Keywords")
+        negative_section = extract_section(selected_block, "Negative Keywords", "Headlines")
+        headlines_section = extract_section(selected_block, "Headlines", "Descriptions")
+        descriptions_section = extract_section(selected_block, "Descriptions", "Final URL")
+        final_url = extract_section(selected_block, "Final URL")
+
+        # Parse lines
+        def parse_lines(section):
+            lines = []
+            for line in section.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("- "):
+                    line = line[2:]
+                lines.append(line)
+            return lines
+
         keywords = []
         keyword_cpcs = []
-        headlines = []
-        descriptions = []
-
-        after_keywords = selected_block.split("Keywords:", 1)[1]
-        keywords_section = after_keywords.split("Headlines:", 1)[0]
-
-        after_headlines = selected_block.split("Headlines:", 1)[1]
-        headlines_section = after_headlines.split("Descriptions:", 1)[0]
-
-        after_descriptions = selected_block.split("Descriptions:", 1)[1]
-        descriptions_section = after_descriptions.split("Final URL:", 1)[0]
-
-        final_url = selected_block.split("Final URL:", 1)[1].strip()
-        if final_url.startswith("- "):
-            final_url = final_url[2:]
-
-        for line in keywords_section.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # Remove leading "- " if present
-            if line.startswith("- "):
-                line = line[2:]
-
+        for line in parse_lines(keywords_section):
             if "{" in line and "}" in line:
-                keyword = line.split("{")[0].strip()
-                cpc = line.split("{")[1].replace("}", "").strip()
-                # ensure int
+                kw = line.split("{")[0].strip()
                 try:
-                    cpc_int = int(cpc)
+                    cpc = int(line.split("{")[1].replace("}", "").strip())
                 except Exception:
-                    cpc_int = 1_500_000
-                keywords.append(keyword)
-                keyword_cpcs.append(cpc_int)
+                    cpc = 1_500_000
+                keywords.append(kw)
+                keyword_cpcs.append(cpc)
+            else:
+                keywords.append(line)
+                keyword_cpcs.append(1_500_000)
 
-        # Parse headlines
-        for line in headlines_section.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("- "):
-                line = line[2:]
-            headlines.append(line)
+        negative_keywords = parse_lines(negative_section)
+        headlines = parse_lines(headlines_section)
+        descriptions = parse_lines(descriptions_section)
 
-        # Parse descriptions
-        for line in descriptions_section.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("- "):
-                line = line[2:]
-            descriptions.append(line)
-
-
-        # If no keywords were found, fallback to the campaign name (Not ideal, shouldn't happen)
         if not keywords:
             keywords = [selected_campaign]
             keyword_cpcs = [1_500_000]
 
-        # Add keywords to the ad group (this is a network call)
+        # ---------------------------------------------------------------------
+        # 6. Add Keywords to Ad Group
+        # ---------------------------------------------------------------------
+        keyword_service = client.get_service("AdGroupCriterionService")
         keyword_ops = []
         BILLABLE_UNIT = 10000
-
         for kw, cpc in zip(keywords, keyword_cpcs):
             op = client.get_type("AdGroupCriterionOperation")
             criterion = op.create
@@ -416,10 +404,7 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
             criterion.keyword.text = kw
             criterion.keyword.match_type = client.enums.KeywordMatchTypeEnum.EXACT
             criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
-
-            rounded_cpc = (cpc // BILLABLE_UNIT) * BILLABLE_UNIT
-            criterion.cpc_bid_micros = rounded_cpc
-
+            criterion.cpc_bid_micros = (cpc // BILLABLE_UNIT) * BILLABLE_UNIT
             keyword_ops.append(op)
 
         await run_blocking(
@@ -429,8 +414,56 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         )
 
         # ---------------------------------------------------------------------
-        # 6. Create Responsive Search Ad (RSA)
+        # 7. Add Negative Keywords via Shared Set
         # ---------------------------------------------------------------------
+        if negative_keywords:
+            # Create shared set
+            shared_set_service = client.get_service("SharedSetService")
+            shared_set_op = client.get_type("SharedSetOperation")
+            shared_set = shared_set_op.create
+            shared_set.name = f"Negatives – {selected_campaign} – {int(time.time())}"
+            shared_set.type_ = client.enums.SharedSetTypeEnum.NEGATIVE_KEYWORDS
+            
+            shared_set_resp = await run_blocking(
+                shared_set_service.mutate_shared_sets,
+                customer_id=customer_id,
+                operations=[shared_set_op],
+            )
+            shared_set_resource = shared_set_resp.results[0].resource_name
+            
+            # Add negative keywords
+            shared_criterion_service = client.get_service("SharedCriterionService")
+            criterion_ops = []
+            
+            for neg_kw in negative_keywords:
+                op = client.get_type("SharedCriterionOperation")
+                crit = op.create
+                crit.shared_set = shared_set_resource
+                crit.keyword.text = neg_kw
+                crit.keyword.match_type = client.enums.KeywordMatchTypeEnum.EXACT
+                criterion_ops.append(op)
+            
+            if criterion_ops:
+                await run_blocking(
+                    shared_criterion_service.mutate_shared_criteria,
+                    customer_id=customer_id,
+                    operations=criterion_ops,
+                )
+            
+            # Link to campaign
+            campaign_shared_set_service = client.get_service("CampaignSharedSetService")
+            cs_op = client.get_type("CampaignSharedSetOperation")
+            cs = cs_op.create
+            cs.campaign = campaign_resource
+            cs.shared_set = shared_set_resource
+            
+            await run_blocking(
+                campaign_shared_set_service.mutate_campaign_shared_sets,
+                customer_id=customer_id,
+                operations=[cs_op],
+            )
+
+
         ad_service = client.get_service("AdGroupAdService")
         ad_operation = client.get_type("AdGroupAdOperation")
         ad_group_ad = ad_operation.create
@@ -441,13 +474,10 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         ad.final_urls.append(final_url)
 
         rsa = client.get_type("ResponsiveSearchAdInfo")
-
-        # Properly create AdTextAsset objects
         for headline in headlines:
             asset = client.get_type("AdTextAsset")
             asset.text = sanitize_text(headline)
             rsa.headlines.append(asset)
-
         for description in descriptions:
             asset = client.get_type("AdTextAsset")
             asset.text = sanitize_text(description)
@@ -456,7 +486,6 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         ad.responsive_search_ad = rsa
         ad_group_ad.ad = ad
 
-        # mutate_ad_group_ads is network blocking -> run in executor
         await run_blocking(
             ad_service.mutate_ad_group_ads,
             customer_id=customer_id,
@@ -470,23 +499,25 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
             f"- Campaign: {campaign_resource}\n"
             f"- Ad Group: {ad_group_resource}\n"
             f"- Keywords: {', '.join(keywords)}\n"
+            f"- Negative keywords: {', '.join(negative_keywords)}\n"
             "Ad is paused for review."
         )
 
     except Exception as e:
-        print(e)
+        print(e, flush=True)
         return f"Error creating search campaign: {e}"
 
 
 async def get_all_google_ads_campaign_details(ctx: Context):
-    """Fetch ALL campaigns along with their ad groups, ads, and keywords using separate queries."""
+    """Fetch ALL campaigns along with their ad groups, ads, keywords, and budgets."""
     customer_id = await ctx.store.get("google_customer_id", "")
 
     client = await get_google_client(ctx)
-    # If client is a string, it means the user isn't authenticated, this gets returned to the LLM to inform the user
     if isinstance(client, str):
         return client
+
     ga_service = client.get_service("GoogleAdsService")
+    budget_service = client.get_service("CampaignBudgetService")
 
     def fetch_all_details_sync():
         results = {"campaigns": {}}
@@ -496,6 +527,7 @@ async def get_all_google_ads_campaign_details(ctx: Context):
             SELECT
                 campaign.id,
                 campaign.name,
+                campaign.campaign_budget,
                 campaign.status,
                 campaign.serving_status,
                 ad_group.id,
@@ -514,10 +546,25 @@ async def get_all_google_ads_campaign_details(ctx: Context):
                 campaign_id = c.id
                 ag_id = ag.id
 
+                # ----------------- Get actual budget amount -----------------
+                budget_amount = None
+                if c.campaign_budget:
+                    budget_query = f"""
+                        SELECT
+                            campaign_budget.amount_micros
+                        FROM campaign_budget
+                        WHERE campaign_budget.resource_name = '{c.campaign_budget}'
+                    """
+                    budget_stream = ga_service.search_stream(customer_id=customer_id, query=budget_query)
+                    for b_batch in budget_stream:
+                        for b_row in b_batch.results:
+                            budget_amount = b_row.campaign_budget.amount_micros / 1_000_000  # Convert to standard units (£/day)
+
                 if campaign_id not in results["campaigns"]:
                     results["campaigns"][campaign_id] = {
                         "id": c.id,
                         "name": c.name,
+                        "budget": budget_amount,
                         "status": getattr(c.status, "name", c.status),
                         "serving_status": getattr(c.serving_status, "name", c.serving_status),
                         "ad_groups": {}
@@ -530,7 +577,8 @@ async def get_all_google_ads_campaign_details(ctx: Context):
                         "name": ag.name,
                         "status": getattr(ag.status, "name", ag.status),
                         "ads": [],
-                        "keywords": []
+                        "keywords": [],
+                        "negative_keywords": []
                     }
 
         # ----------------- 2. Ads -----------------
@@ -582,6 +630,51 @@ async def get_all_google_ads_campaign_details(ctx: Context):
                             "cpc_bid_micros": kw.cpc_bid_micros,
                             "cpc_bid_gbp": kw.cpc_bid_micros / 1_000_000 if kw.cpc_bid_micros else None
                         })
+
+        # ----------------- 4. Ad Group Negative Keywords -----------------
+        for campaign_id, campaign in results["campaigns"].items():
+            for ag_id, ad_group in campaign["ad_groups"].items():
+                query_negative_kw = f"""
+                    SELECT
+                        ad_group_criterion.keyword.text,
+                        ad_group_criterion.keyword.match_type,
+                        ad_group_criterion.status
+                    FROM ad_group_criterion
+                    WHERE ad_group_criterion.type = KEYWORD
+                      AND ad_group_criterion.negative = TRUE
+                      AND ad_group_criterion.ad_group = 'customers/{customer_id}/adGroups/{ag_id}'
+                """
+                stream_neg_kw = ga_service.search_stream(customer_id=customer_id, query=query_negative_kw)
+                for batch in stream_neg_kw:
+                    for row in batch.results:
+                        kw = row.ad_group_criterion
+                        ad_group["negative_keywords"].append({
+                            "text": kw.keyword.text,
+                            "match_type": getattr(kw.keyword.match_type, "name", kw.keyword.match_type),
+                            "status": getattr(kw, "status", None)
+                        })
+
+        # ----------------- 5. Campaign Negative Keywords -----------------
+        for campaign_id, campaign in results["campaigns"].items():
+            query_campaign_neg_kw = f"""
+                SELECT
+                    campaign_criterion.keyword.text,
+                    campaign_criterion.keyword.match_type,
+                    campaign_criterion.status
+                FROM campaign_criterion
+                WHERE campaign_criterion.type = KEYWORD
+                  AND campaign_criterion.negative = TRUE
+                  AND campaign_criterion.campaign = 'customers/{customer_id}/campaigns/{campaign_id}'
+            """
+            stream_campaign_neg_kw = ga_service.search_stream(customer_id=customer_id, query=query_campaign_neg_kw)
+            for batch in stream_campaign_neg_kw:
+                for row in batch.results:
+                    kw = row.campaign_criterion
+                    campaign.setdefault("negative_keywords", []).append({
+                        "text": kw.keyword.text,
+                        "match_type": getattr(kw.keyword.match_type, "name", kw.keyword.match_type),
+                        "status": getattr(kw, "status", None)
+                    })
 
         return results
 
@@ -718,7 +811,7 @@ async def manage_ad_group_ads(ctx: Context, ad_group_id: str, create_ads: list, 
             for d in descriptions:
                 ad_obj.ad.responsive_search_ad.descriptions.append(AdTextAsset(text=d))
             ad_obj.ad.final_urls.extend(final_urls)
-            ad_obj.status = AdGroupAdStatusEnum.AdGroupAdStatus.ENABLED
+            ad_obj.status = AdGroupAdStatusEnum.AdGroupAdStatus.PAUSED
 
             resp = ad_group_ad_service.mutate_ad_group_ads(
                 customer_id=customer_id, operations=[op]
@@ -794,3 +887,57 @@ async def manage_ad_groups(ctx: Context, campaign_id: str, create_ad_groups:list
 
     return await run_blocking(sync_manage_ad_groups)
 
+
+async def adjust_campaign_budget(ctx: Context, campaign_id: str, new_budget: float) -> str:
+    customer_id = await ctx.store.get("google_customer_id", "")
+
+    client = await get_google_client(ctx)
+    if isinstance(client, str):
+        return client
+
+    budget_micros = int(new_budget * 1_000_000)
+
+    campaign_service = client.get_service("CampaignService")
+    budget_service = client.get_service("CampaignBudgetService")
+
+    try:
+        # 1️⃣ Get the campaign to find its budget resource
+        query = f"""
+            SELECT
+                campaign.campaign_budget
+            FROM campaign
+            WHERE campaign.id = {campaign_id}
+        """
+        search_response = await run_blocking(
+            client.get_service("GoogleAdsService").search,
+            customer_id=customer_id,
+            query=query,
+        )
+
+        rows = list(search_response)
+        if not rows:
+            return f"Campaign with ID {campaign_id} not found."
+
+        budget_resource_name = rows[0].campaign.campaign_budget
+
+        # 2️⃣ Prepare update operation
+        budget_operation = client.get_type("CampaignBudgetOperation")
+        budget = budget_operation.update
+        budget.resource_name = budget_resource_name
+        budget.amount_micros = budget_micros
+
+        # Correct FieldMask
+        mask = FieldMask(paths=["amount_micros"])
+        client.copy_from(budget_operation.update_mask, mask)
+
+        # 3️⃣ Execute update
+        await run_blocking(
+            budget_service.mutate_campaign_budgets,
+            customer_id=customer_id,
+            operations=[budget_operation],
+        )
+
+        return f"Budget updated to £{new_budget}/day."
+
+    except Exception as e:
+        return f"Error adjusting budget: {e}"

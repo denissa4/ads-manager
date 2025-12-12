@@ -9,10 +9,14 @@
 - CPC should be in **micro-units**, not pounds.
   - Conversion: £1.00 = 1_000_000 micros.
 - Enclose CPC in **curly braces {}** immediately after the keyword.
-- Only include the median CPC calculated from the data.
+- Only include the minimum CPC + 10% calculated from the data.
 - Do NOT leave the CPC in £, do NOT invent values.
 - Example format: electric bikes {1800000}
 - CPC must be at least 100000 micros and **cannot be '0'**
+
+## Negative Keywords section:
+
+- Infer relevant negative keywords based on the user's target audience and the campaign itself.
 
 ## Headlines section:
 
@@ -32,3 +36,4 @@
 
 - Be sure to seperate each campaign idea using "---" as a seperator.
 - If the user's data contains a product URL use this as "Final URL", otherwise use "https://www.example.com" as a placeholder.
+- It is important that you ahere completely to the template layout, including the markdown syntax.
