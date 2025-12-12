@@ -901,7 +901,6 @@ async def adjust_campaign_budget(ctx: Context, campaign_id: str, new_budget: flo
     budget_service = client.get_service("CampaignBudgetService")
 
     try:
-        # 1️⃣ Get the campaign to find its budget resource
         query = f"""
             SELECT
                 campaign.campaign_budget
@@ -920,17 +919,14 @@ async def adjust_campaign_budget(ctx: Context, campaign_id: str, new_budget: flo
 
         budget_resource_name = rows[0].campaign.campaign_budget
 
-        # 2️⃣ Prepare update operation
         budget_operation = client.get_type("CampaignBudgetOperation")
         budget = budget_operation.update
         budget.resource_name = budget_resource_name
         budget.amount_micros = budget_micros
 
-        # Correct FieldMask
         mask = FieldMask(paths=["amount_micros"])
         client.copy_from(budget_operation.update_mask, mask)
 
-        # 3️⃣ Execute update
         await run_blocking(
             budget_service.mutate_campaign_budgets,
             customer_id=customer_id,

@@ -46,6 +46,7 @@ Capabilities:
 
 ## Campaign ideas Generation
 - Generate 3-5 campaign ideas by default, unless the user specifies.
+- You MUST ALWAYS complete a keyword search before generating campaign ideas, even if you need to authenticate the user first.
 
 ## Keyword searches
 - When converting Micros to GBP remember £1.00 = 1_000_000 micros **ALWAYS** use this calculation when converting micros to GBP.
