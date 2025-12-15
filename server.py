@@ -52,13 +52,17 @@ async def startup_tasks():
 
 
 async def stream_response(agent, full_prompt, context, memory):
-    handler = agent.run(user_msg=full_prompt, ctx=context, memory=memory)
-    async for event in handler.stream_events():
-        if isinstance(event, AgentStream):
-            if event.delta:
-                yield "".join(event.delta)
-        elif isinstance(event, ToolCall):
-            yield f"\n\n**Using tool: {event.tool_name.replace("_", "-")}**\n\n"
+    try:
+        handler = agent.run(user_msg=full_prompt, ctx=context, memory=memory)
+        async for event in handler.stream_events():
+            if isinstance(event, AgentStream):
+                if event.delta:
+                    yield "".join(event.delta)
+            elif isinstance(event, ToolCall):
+                yield f"\n\n**Using tool: {event.tool_name.replace("_", "-")}**\n\n"
+    except Exception as e:
+        print(f"Error in LLM response: {e}", flush=True)
+        yield f"Error: {e}"
 
 
 # Main messaging endpoint 

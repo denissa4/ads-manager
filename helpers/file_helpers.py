@@ -42,8 +42,8 @@ async def create_keyword_report_file(data: list) -> str:
                     "Average Monthly Searches": row.get("avg_monthly_searches", "N/A"),
                     "Competition": row.get("competition", "N/A"),
                     "Competition Index": row.get("competition_index", "N/A"),
-                    "Low Top of Page Bid (micros)": row.get("low_top_of_page_bid", "N/A"),
-                    "High Top of Page Bid (micros)": row.get("high_top_of_page_bid", "N/A")
+                    "Low Top of Page Bid (micros)": row.get("low_bid", "0"),
+                    "High Top of Page Bid (micros)": row.get("high_bid", "100000")
                 })
 
     loop = asyncio.get_event_loop()
@@ -56,8 +56,11 @@ def create_ads_campaign_file(data: str) -> str:
     file_name = f"{str(uuid.uuid4())[:6]}_ads_campaign_ideas.txt"
     file_path = f"{FILE_SERVE_DIR}/{file_name}"
 
+    if data.startswith("assistant:"):
+        data = data.removeprefix("assistant:")
+
     with open(file_path, 'w') as f:
-        f.write(data)
+        f.write(data.strip())
 
     return f"{APP_URL}/downloads/{file_name}", file_path
 

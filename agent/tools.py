@@ -13,6 +13,7 @@ import os
 import re
 import time
 import base64
+from bs4 import BeautifulSoup
 
 
 DEVELOPER_TOKEN = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
@@ -66,6 +67,8 @@ async def get_data_from_urls(ctx: Context, urls: list) -> str:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         data = await response.text()
+                        soup = BeautifulSoup(data, "html.parser")
+                        data = soup.get_text(separator=" ", strip=True)
                 except Exception as inner_e:
                     print(f"Failed to fetch {url}: {inner_e}")
                     continue
@@ -84,12 +87,14 @@ async def get_data_from_urls(ctx: Context, urls: list) -> str:
         await ctx.store.set("uploaded_files", uploaded_files)
         return organized
     except Exception as e:
-        print(f"Error in get_data_from_urls: {e}")
+        print(f"Error in get_data_from_urls: {e}", flush=True)
         return ""
+
 
 async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
     """Conducts a Google Ads Keyword search and returns keyword stats, up to 2000 total results."""
     try:
+        print(f"Keywords: {keywords}", flush=True)
         client = await get_google_client(ctx)
         if isinstance(client, str):
             return client
@@ -106,7 +111,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
         results = []
 
         # Limit per keyword
-        per_seed_limit = max(1, 2000 // len(keywords))
+        per_seed_limit = max(1, 1000 // len(keywords))
 
         for seed_word in keywords:
             request = client.get_type("GenerateKeywordIdeasRequest")
@@ -116,7 +121,9 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
             request.geo_target_constants.append(geo_target_resource_name)
             request.keyword_seed.keywords.append(seed_word)
 
+            await asyncio.sleep(4)
             response = await run_blocking(keyword_plan_idea_service.generate_keyword_ideas, request=request)
+            await asyncio.sleep(1)
             ideas = list(response)
 
             # Apply limit safely, no index error
@@ -128,10 +135,9 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
                     "keyword": idea.text,
                     "avg_monthly_searches": metrics.avg_monthly_searches,
                     "competition": metrics.competition.name,
-                    "low_top_of_page_bid": metrics.low_top_of_page_bid_micros,
-                    "high_top_of_page_bid": metrics.high_top_of_page_bid_micros,
+                    "low_bid": metrics.low_top_of_page_bid_micros,
+                    "high_bid": metrics.high_top_of_page_bid_micros,
                     "competition_index": metrics.competition_index,
-                    "seed_word": seed_word
                 })
 
             await asyncio.sleep(1)
@@ -149,7 +155,7 @@ async def google_ads_keyword_search(ctx: Context, keywords: list) -> str:
         )
 
     except Exception as e:
-        print(e)
+        print(e, flush=True)
         return f"Error conducting keyword search: {str(e)}"
 
 
@@ -416,52 +422,52 @@ async def generate_search_campaign(ctx: Context, selected_campaign: str) -> str:
         # ---------------------------------------------------------------------
         # 7. Add Negative Keywords via Shared Set
         # ---------------------------------------------------------------------
-        if negative_keywords:
-            # Create shared set
-            shared_set_service = client.get_service("SharedSetService")
-            shared_set_op = client.get_type("SharedSetOperation")
-            shared_set = shared_set_op.create
-            shared_set.name = f"Negatives – {selected_campaign} – {int(time.time())}"
-            shared_set.type_ = client.enums.SharedSetTypeEnum.NEGATIVE_KEYWORDS
+        # if negative_keywords:
+        #     # Create shared set
+        #     shared_set_service = client.get_service("SharedSetService")
+        #     shared_set_op = client.get_type("SharedSetOperation")
+        #     shared_set = shared_set_op.create
+        #     shared_set.name = f"Negatives – {selected_campaign} – {int(time.time())}"
+        #     shared_set.type_ = client.enums.SharedSetTypeEnum.NEGATIVE_KEYWORDS
             
-            shared_set_resp = await run_blocking(
-                shared_set_service.mutate_shared_sets,
-                customer_id=customer_id,
-                operations=[shared_set_op],
-            )
-            shared_set_resource = shared_set_resp.results[0].resource_name
+        #     shared_set_resp = await run_blocking(
+        #         shared_set_service.mutate_shared_sets,
+        #         customer_id=customer_id,
+        #         operations=[shared_set_op],
+        #     )
+        #     shared_set_resource = shared_set_resp.results[0].resource_name
             
-            # Add negative keywords
-            shared_criterion_service = client.get_service("SharedCriterionService")
-            criterion_ops = []
+        #     # Add negative keywords
+        #     shared_criterion_service = client.get_service("SharedCriterionService")
+        #     criterion_ops = []
             
-            for neg_kw in negative_keywords:
-                op = client.get_type("SharedCriterionOperation")
-                crit = op.create
-                crit.shared_set = shared_set_resource
-                crit.keyword.text = neg_kw
-                crit.keyword.match_type = client.enums.KeywordMatchTypeEnum.EXACT
-                criterion_ops.append(op)
+        #     for neg_kw in negative_keywords:
+        #         op = client.get_type("SharedCriterionOperation")
+        #         crit = op.create
+        #         crit.shared_set = shared_set_resource
+        #         crit.keyword.text = neg_kw
+        #         crit.keyword.match_type = client.enums.KeywordMatchTypeEnum.EXACT
+        #         criterion_ops.append(op)
             
-            if criterion_ops:
-                await run_blocking(
-                    shared_criterion_service.mutate_shared_criteria,
-                    customer_id=customer_id,
-                    operations=criterion_ops,
-                )
+        #     if criterion_ops:
+        #         await run_blocking(
+        #             shared_criterion_service.mutate_shared_criteria,
+        #             customer_id=customer_id,
+        #             operations=criterion_ops,
+        #         )
             
-            # Link to campaign
-            campaign_shared_set_service = client.get_service("CampaignSharedSetService")
-            cs_op = client.get_type("CampaignSharedSetOperation")
-            cs = cs_op.create
-            cs.campaign = campaign_resource
-            cs.shared_set = shared_set_resource
+        #     # Link to campaign
+        #     campaign_shared_set_service = client.get_service("CampaignSharedSetService")
+        #     cs_op = client.get_type("CampaignSharedSetOperation")
+        #     cs = cs_op.create
+        #     cs.campaign = campaign_resource
+        #     cs.shared_set = shared_set_resource
             
-            await run_blocking(
-                campaign_shared_set_service.mutate_campaign_shared_sets,
-                customer_id=customer_id,
-                operations=[cs_op],
-            )
+        #     await run_blocking(
+        #         campaign_shared_set_service.mutate_campaign_shared_sets,
+        #         customer_id=customer_id,
+        #         operations=[cs_op],
+        #     )
 
 
         ad_service = client.get_service("AdGroupAdService")
@@ -689,6 +695,10 @@ async def manage_ad_group_keywords(ctx: Context, ad_group_id: str, add_keywords:
     - ad_group_id: str, the ID of the ad group
     - add_keywords: list of dicts [{"text": "keyword text", "match_type": "EXACT|PHRASE|BROAD", "cpc_bid_gbp": float}, ...]. Should be an empty list if none.
     - remove_keywords: list of strings (keyword texts to remove). Should be an empty list if none.
+
+    When updating attributes of a keyword such as CPC, you must add the keyword to remove_keywords and add_keywords with the new attributes.
+    NEVER remove a keyword without adding it in the same tool call UNLESS the user has explicitly asked you to remove keywords.
+    ALWAYS use exact match type unless told otherwise by the user.
     
     Returns: dict with 'added' and 'removed' keyword resource names
     """
@@ -707,25 +717,6 @@ async def manage_ad_group_keywords(ctx: Context, ad_group_id: str, add_keywords:
     def sync_manage_keywords():
         added = []
         removed = []
-
-        # ---------- ADD KEYWORDS ----------
-        for kw in add_keywords:
-            operation = client.get_type("AdGroupCriterionOperation")
-            criterion = operation.create
-            criterion.ad_group = ad_group_service.ad_group_path(customer_id, ad_group_id)
-            criterion.keyword.text = kw["text"]
-            match_type_str = kw.get("match_type", "BROAD").upper()
-            criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type_str)
-            criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
-
-            # Optional CPC bid
-            if kw.get("cpc_bid_gbp") is not None:
-                criterion.cpc_bid_micros = int(kw["cpc_bid_gbp"] * 1_000_000)
-
-            response = ad_group_criterion_service.mutate_ad_group_criteria(
-                customer_id=customer_id, operations=[operation]
-            )
-            added.append(response.results[0].resource_name)
 
         # ---------- REMOVE KEYWORDS ----------
         if remove_keywords:
@@ -754,6 +745,27 @@ async def manage_ad_group_keywords(ctx: Context, ad_group_id: str, add_keywords:
                     )
                     removed.append(response.results[0].resource_name)
 
+        # ---------- ADD KEYWORDS ----------
+        for kw in add_keywords:
+            operation = client.get_type("AdGroupCriterionOperation")
+            criterion = operation.create
+            criterion.ad_group = ad_group_service.ad_group_path(customer_id, ad_group_id)
+            criterion.keyword.text = kw["text"]
+            match_type_str = kw.get("match_type", "EXACT").upper()
+            # criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type_str)
+            criterion.keyword.match_type = getattr(client.enums.KeywordMatchTypeEnum, match_type_str)
+            criterion.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+
+            # Optional CPC bid
+            if kw.get("cpc_bid_gbp") is not None:
+                criterion.cpc_bid_micros = int(kw["cpc_bid_gbp"] * 1_000_000)
+
+            response = ad_group_criterion_service.mutate_ad_group_criteria(
+                customer_id=customer_id, operations=[operation]
+            )
+            added.append(response.results[0].resource_name)
+
+
         return {"added": added, "removed": removed}
 
     return await run_blocking(sync_manage_keywords)
@@ -770,6 +782,11 @@ async def manage_ad_group_ads(ctx: Context, ad_group_id: str, create_ads: list, 
       ]. Must have at least 3 headlines and 2 descriptions per ad.
       Can be empty if none.
     - remove_ad_ids: list of ad IDs (integers or strings) to remove. Can be empty if none.
+
+    If the user does not supply a URL to add to the ad, youu must use the same URL as used in other ads for the same campaign (or if multiple URLs are used, use the root of the URL for their website.)
+
+    Headlines MUST be 28 characters or less.
+    Descriptions MUST be 80 characters or less.
 
     Returns: dict with 'created' and 'removed' ad resource names
     """
